@@ -1,0 +1,48 @@
+[package]
+name = "acre"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Warm, reusable Git workspaces. Every branch, already ready."
+license = "MIT OR Apache-2.0"
+authors = ["Brayden Moon"]
+repository = "https://github.com/binbandit/acre"
+readme = "README.md"
+keywords = ["git", "worktree", "workspace", "cache", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "acre"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["clock", "serde"] }
+dirs = "6.0"
+crossterm = "0.29"
+libc = "0.2"
+wait-timeout = "0.2"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.14"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
