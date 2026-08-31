@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acre.dev/schemas/acre.schema.json",
+  "title": "Acre user configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "root", "pool", "environment", "safety"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "root": { "type": "string", "minLength": 1 },
+    "pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minSlots", "maxSlots", "replenish", "idleRetentionDays"],
+      "properties": {
+        "minSlots": { "type": "integer", "minimum": 0 },
+        "maxSlots": { "type": "integer", "minimum": 1 },
+        "replenish": { "type": "boolean" },
+        "idleRetentionDays": { "type": "number", "minimum": 0 }
+      }
+    },
+    "environment": { "$ref": "#/$defs/environment" },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detectProcesses", "blockUnknownIgnoredFiles"],
+      "properties": {
+        "detectProcesses": { "type": "boolean" },
+        "blockUnknownIgnoredFiles": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "relativePathArray": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "not": { "pattern": "(^/|^[A-Za-z]:|(^|/)\\.\\.(/|$))" }
+      },
+      "uniqueItems": true
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cacheRoots", "requiredRoots", "seedFiles", "excludedRoots"],
+      "properties": {
+        "cacheRoots": { "$ref": "#/$defs/relativePathArray" },
+        "requiredRoots": { "$ref": "#/$defs/relativePathArray" },
+        "seedFiles": { "$ref": "#/$defs/relativePathArray" },
+        "excludedRoots": { "$ref": "#/$defs/relativePathArray" }
+      }
+    }
+  }
+}
