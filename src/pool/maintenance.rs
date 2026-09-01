@@ -34,10 +34,7 @@ pub struct GcReport {
     pub state: RepositoryState,
 }
 
-pub fn repair_repository_state(
-    config: &AcreConfig,
-    repository_input: &Repository,
-) -> Result<RepairReport> {
+pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repository) -> Result<RepairReport> {
     let _lock = RepositoryLock::acquire(&repository_lock_path(config, repository_input))?;
     let _ = prune_worktrees(repository_input);
     let _ = repair_worktrees(repository_input);
@@ -112,8 +109,15 @@ pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Resu
             }),
         }
     }
-    let removed_ids = removed.iter().map(|slot| slot.id.as_str()).collect::<BTreeSet<_>>();
+    let removed_ids = removed
+        .iter()
+        .map(|slot| slot.id.as_str())
+        .collect::<BTreeSet<_>>();
     state.slots.retain(|slot| !removed_ids.contains(slot.id.as_str()));
     save_repository_state(config, &repository, &state)?;
-    Ok(GcReport { removed, skipped, state })
+    Ok(GcReport {
+        removed,
+        skipped,
+        state,
+    })
 }

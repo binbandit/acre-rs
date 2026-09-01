@@ -7,10 +7,7 @@ pub fn save_pending_done(config: &AcreConfig, operation: &PendingDoneOperation) 
     write_json(&operation_path(config, &operation.token), operation)
 }
 
-pub fn read_pending_done(
-    config: &AcreConfig,
-    token: &str,
-) -> Result<Option<PendingDoneOperation>> {
+pub fn read_pending_done(config: &AcreConfig, token: &str) -> Result<Option<PendingDoneOperation>> {
     Ok(read_json::<PendingDoneOperation>(&operation_path(config, token))?
         .filter(|operation| operation.kind == "done"))
 }

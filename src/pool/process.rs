@@ -1,19 +1,15 @@
-use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::git::runner::{RunOptions, run_process};
 use crate::model::ProcessUse;
-use crate::util::is_inside;
 
 pub fn find_processes_using_path(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> {
     #[cfg(target_os = "linux")]
     {
-        return find_linux_processes(target, ignored_pids);
+        find_linux_processes(target, ignored_pids)
     }
     #[cfg(target_os = "macos")]
     {
-        return find_macos_processes(target, ignored_pids);
+        find_macos_processes(target, ignored_pids)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -24,6 +20,11 @@ pub fn find_processes_using_path(target: &Path, ignored_pids: &[u32]) -> Vec<Pro
 
 #[cfg(target_os = "linux")]
 fn find_linux_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> {
+    use std::collections::BTreeSet;
+    use std::fs;
+
+    use crate::util::is_inside;
+
     let mut ignored: BTreeSet<u32> = ignored_pids.iter().copied().collect();
     ignored.insert(std::process::id());
     let mut result = Vec::new();
@@ -62,6 +63,12 @@ fn find_linux_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> 
 
 #[cfg(target_os = "macos")]
 fn find_macos_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> {
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    use crate::git::runner::{RunOptions, run_process};
+    use crate::util::is_inside;
+
     let result = run_process(
         "lsof",
         &["-a".into(), "-d".into(), "cwd".into(), "-F".into(), "pcn".into()],
@@ -86,12 +93,18 @@ fn find_macos_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> 
             command = value.to_owned();
         } else if let Some(value) = line.strip_prefix('n') {
             let Some(pid) = pid else { continue };
-            if ignored.contains(&pid) { continue; }
+            if ignored.contains(&pid) {
+                continue;
+            }
             let cwd = PathBuf::from(value);
             if is_inside(target, &cwd) {
                 rows.push(ProcessUse {
                     pid,
-                    command: if command.is_empty() { format!("pid {pid}") } else { command.clone() },
+                    command: if command.is_empty() {
+                        format!("pid {pid}")
+                    } else {
+                        command.clone()
+                    },
                     cwd: Some(cwd),
                 });
             }

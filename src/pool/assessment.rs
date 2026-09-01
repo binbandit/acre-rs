@@ -32,10 +32,7 @@ pub fn assess_workspace(
         .into_iter()
         .filter(|entry| !baseline.contains(entry.as_str()))
         .collect::<Vec<_>>();
-    let changed_seed_files = changed_seed_files(
-        &workspace.path,
-        &workspace.baseline_seed_files,
-    )?;
+    let changed_seed_files = changed_seed_files(&workspace.path, &workspace.baseline_seed_files)?;
     let leases = state
         .leases
         .iter()

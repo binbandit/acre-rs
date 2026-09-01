@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::model::{
-    AcreConfig, GitWorktree, Repository, RepositoryState, StoredTarget, TrustLevel,
-    WorkspaceLease, WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
+    AcreConfig, GitWorktree, Repository, RepositoryState, StoredTarget, TrustLevel, WorkspaceLease,
+    WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
 };
 use crate::state::lock::is_pid_alive;
 use crate::state::paths::{active_root, repository_state_path, slots_root};
@@ -12,10 +12,7 @@ use crate::util::{is_inside, now_iso, random_short, read_json, write_json};
 
 pub fn load_repository_state(config: &AcreConfig, repository: &Repository) -> Result<RepositoryState> {
     let path = repository_state_path(config, repository);
-    let stored = match read_json::<RepositoryState>(&path) {
-        Ok(value) => value,
-        Err(_) => None,
-    };
+    let stored = read_json::<RepositoryState>(&path).unwrap_or_default();
     let state = match stored {
         Some(state) if state.schema_version == 1 && state.repository_id == repository.id => {
             reconcile_state(state, &repository.worktrees)
@@ -77,8 +74,7 @@ pub fn reconcile_state(mut state: RepositoryState, worktrees: &[GitWorktree]) ->
         .map(|workspace| workspace.id.as_str())
         .collect();
     state.leases.retain(|lease| {
-        valid.contains(lease.workspace_id.as_str())
-            && lease.pid.map(is_pid_alive).unwrap_or(true)
+        valid.contains(lease.workspace_id.as_str()) && lease.pid.map(is_pid_alive).unwrap_or(true)
     });
     state.updated_at = now_iso();
     state
@@ -89,9 +85,10 @@ pub fn find_workspace_by_path<'a>(
     target_path: &Path,
 ) -> Option<&'a WorkspaceRecord> {
     let target_path = crate::util::canonical_or_absolute(target_path);
-    state.workspaces.iter().find(|workspace| {
-        crate::util::canonical_or_absolute(&workspace.path) == target_path
-    })
+    state
+        .workspaces
+        .iter()
+        .find(|workspace| crate::util::canonical_or_absolute(&workspace.path) == target_path)
 }
 
 pub fn find_workspace_by_path_mut<'a>(
@@ -99,9 +96,10 @@ pub fn find_workspace_by_path_mut<'a>(
     target_path: &Path,
 ) -> Option<&'a mut WorkspaceRecord> {
     let target_path = crate::util::canonical_or_absolute(target_path);
-    state.workspaces.iter_mut().find(|workspace| {
-        crate::util::canonical_or_absolute(&workspace.path) == target_path
-    })
+    state
+        .workspaces
+        .iter_mut()
+        .find(|workspace| crate::util::canonical_or_absolute(&workspace.path) == target_path)
 }
 
 pub fn find_workspace_for_target<'a>(
@@ -114,8 +112,7 @@ pub fn find_workspace_for_target<'a>(
         }
         if let Some(pull_request) = &target.pull_request {
             return workspace.target.pull_request.as_ref().is_some_and(|candidate| {
-                candidate.number == pull_request.number
-                    && candidate.repository == pull_request.repository
+                candidate.number == pull_request.number && candidate.repository == pull_request.repository
             });
         }
         if let Some(local_branch) = &target.local_branch {
@@ -125,10 +122,7 @@ pub fn find_workspace_for_target<'a>(
     })
 }
 
-pub fn leases_for_workspace<'a>(
-    state: &'a RepositoryState,
-    workspace_id: &str,
-) -> Vec<&'a WorkspaceLease> {
+pub fn leases_for_workspace<'a>(state: &'a RepositoryState, workspace_id: &str) -> Vec<&'a WorkspaceLease> {
     state
         .leases
         .iter()
@@ -174,9 +168,7 @@ fn recover_owned_worktrees(
             });
             continue;
         }
-        if is_inside(&active_root(config, repository), &path)
-            && !workspace_paths.contains(&path)
-        {
+        if is_inside(&active_root(config, repository), &path) && !workspace_paths.contains(&path) {
             let local_branch = worktree.branch.clone();
             state.workspaces.push(WorkspaceRecord {
                 id: format!("recovered-{}", random_short(10)),
@@ -195,9 +187,9 @@ fn recover_owned_worktrees(
                     } else {
                         crate::model::TargetKind::Worktree
                     },
-                    display_name: local_branch
-                        .clone()
-                        .unwrap_or_else(|| format!("detached-{}", &worktree.head[..worktree.head.len().min(8)])),
+                    display_name: local_branch.clone().unwrap_or_else(|| {
+                        format!("detached-{}", &worktree.head[..worktree.head.len().min(8)])
+                    }),
                     oid: worktree.head.clone(),
                     local_branch,
                     remote_branch: None,

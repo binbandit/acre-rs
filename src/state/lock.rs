@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -34,9 +33,17 @@ impl RepositoryLock {
         loop {
             match fs::create_dir(path) {
                 Ok(()) => {
-                    let owner = LockOwner { token: token.clone(), pid: std::process::id(), created_at: now_iso() };
+                    let owner = LockOwner {
+                        token: token.clone(),
+                        pid: std::process::id(),
+                        created_at: now_iso(),
+                    };
                     write_json(&path.join("owner.json"), &owner)?;
-                    return Ok(Self { path: path.to_path_buf(), token, released: false });
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                        token,
+                        released: false,
+                    });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     let owner = read_json::<LockOwner>(&path.join("owner.json"))?;
@@ -56,7 +63,12 @@ impl RepositoryLock {
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
-                Err(error) => return Err(AcreError::io(format!("could not acquire {}", path.display()), error)),
+                Err(error) => {
+                    return Err(AcreError::io(
+                        format!("could not acquire {}", path.display()),
+                        error,
+                    ));
+                }
             }
         }
     }
@@ -68,7 +80,9 @@ impl RepositoryLock {
     }
 
     fn release_inner(&self) {
-        let owner = read_json::<LockOwner>(&self.path.join("owner.json")).ok().flatten();
+        let owner = read_json::<LockOwner>(&self.path.join("owner.json"))
+            .ok()
+            .flatten();
         if owner.as_ref().is_some_and(|owner| owner.token == self.token) {
             let _ = remove_path(&self.path);
         }
@@ -89,26 +103,27 @@ pub fn is_pid_alive(pid: u32) -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        return Path::new("/proc").join(pid.to_string()).exists();
+        Path::new("/proc").join(pid.to_string()).exists()
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        return Command::new("kill")
+        std::process::Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
             .status()
-            .is_ok_and(|status| status.success());
+            .is_ok_and(|status| status.success())
     }
     #[cfg(windows)]
     {
-        let output = Command::new("tasklist")
+        let output = std::process::Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH"])
             .output();
-        return output
-            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()));
+        output.is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
     }
-    #[allow(unreachable_code)]
-    false
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
 }
 
 fn lock_is_clearly_abandoned(path: &Path) -> bool {

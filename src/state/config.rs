@@ -4,9 +4,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::error::{AcreError, Result, exit};
-use crate::model::{
-    AcreConfig, EnvironmentConfig, PoolConfig, RepoConfig, SafetyConfig,
-};
+use crate::model::{AcreConfig, EnvironmentConfig, PoolConfig, RepoConfig, SafetyConfig};
 use crate::state::paths::{config_path, default_acre_root};
 use crate::util::{read_json, validate_relative_path, write_json};
 
@@ -131,7 +129,9 @@ pub fn set_config_value(config: &mut AcreConfig, key: &str, raw: &str) -> Result
         "environment.seedFiles" => config.environment.seed_files = as_strings(&value, key)?,
         "environment.excludedRoots" => config.environment.excluded_roots = as_strings(&value, key)?,
         "safety.detectProcesses" => config.safety.detect_processes = as_bool(&value, key)?,
-        "safety.blockUnknownIgnoredFiles" => config.safety.block_unknown_ignored_files = as_bool(&value, key)?,
+        "safety.blockUnknownIgnoredFiles" => {
+            config.safety.block_unknown_ignored_files = as_bool(&value, key)?
+        }
         _ => return Err(invalid_error(format!("Unknown configuration key: {key}"))),
     }
     validate_acre_config(config)?;
@@ -171,22 +171,35 @@ fn validate_environment_paths<'a>(values: impl Iterator<Item = &'a String>, sour
 }
 
 fn as_usize(value: &Value, key: &str) -> Result<usize> {
-    value.as_u64().and_then(|value| usize::try_from(value).ok()).ok_or_else(|| invalid_error(format!("{key} must be a non-negative integer.")))
+    value
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| invalid_error(format!("{key} must be a non-negative integer.")))
 }
 
 fn as_u64(value: &Value, key: &str) -> Result<u64> {
-    value.as_u64().ok_or_else(|| invalid_error(format!("{key} must be a non-negative integer.")))
+    value
+        .as_u64()
+        .ok_or_else(|| invalid_error(format!("{key} must be a non-negative integer.")))
 }
 
 fn as_bool(value: &Value, key: &str) -> Result<bool> {
-    value.as_bool().ok_or_else(|| invalid_error(format!("{key} must be a boolean.")))
+    value
+        .as_bool()
+        .ok_or_else(|| invalid_error(format!("{key} must be a boolean.")))
 }
 
 fn as_strings(value: &Value, key: &str) -> Result<Vec<String>> {
     value
         .as_array()
         .filter(|values| values.iter().all(Value::is_string))
-        .map(|values| values.iter().filter_map(Value::as_str).map(ToOwned::to_owned).collect())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
         .ok_or_else(|| invalid_error(format!("{key} must be an array of strings.")))
 }
 

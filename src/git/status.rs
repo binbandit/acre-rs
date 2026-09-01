@@ -41,9 +41,19 @@ pub fn parse_status(buffer: &[u8]) -> WorkingTreeStatus {
             let parts: Vec<&str> = row.split(' ').collect();
             let xy = parts.get(1).copied().unwrap_or("..");
             let rename = row.starts_with("2 ");
-            let path_index = if row.starts_with("1 ") { 8 } else if rename { 9 } else { 10 };
+            let path_index = if row.starts_with("1 ") {
+                8
+            } else if rename {
+                9
+            } else {
+                10
+            };
             let path = parts.get(path_index..).unwrap_or_default().join(" ");
-            let original_path = if rename { fields.get(index + 1).cloned() } else { None };
+            let original_path = if rename {
+                fields.get(index + 1).cloned()
+            } else {
+                None
+            };
             let mut chars = xy.chars();
             let index_state = chars.next().unwrap_or('.');
             let worktree_state = chars.next().unwrap_or('.');
@@ -141,7 +151,11 @@ pub fn list_ignored(cwd: &Path, excluded_roots: &[String]) -> Result<Vec<String>
         .split(|byte| *byte == 0)
         .filter(|value| !value.is_empty())
         .map(|value| String::from_utf8_lossy(value).into_owned())
-        .filter(|entry| !roots.iter().any(|root| entry == root || entry.starts_with(&format!("{root}/"))))
+        .filter(|entry| {
+            !roots
+                .iter()
+                .any(|root| entry == root || entry.starts_with(&format!("{root}/")))
+        })
         .collect();
     entries.sort();
     Ok(entries)

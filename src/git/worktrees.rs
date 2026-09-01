@@ -97,9 +97,9 @@ pub fn find_current_worktree(worktrees: &[GitWorktree], cwd: &Path) -> Option<Gi
     let cwd = canonical_or_absolute(cwd);
     let mut candidates = worktrees.to_vec();
     candidates.sort_by_key(|worktree| std::cmp::Reverse(worktree.path.as_os_str().len()));
-    candidates
-        .into_iter()
-        .find(|worktree| cwd == canonical_or_absolute(&worktree.path) || cwd.starts_with(canonical_or_absolute(&worktree.path)))
+    candidates.into_iter().find(|worktree| {
+        cwd == canonical_or_absolute(&worktree.path) || cwd.starts_with(canonical_or_absolute(&worktree.path))
+    })
 }
 
 #[cfg(test)]

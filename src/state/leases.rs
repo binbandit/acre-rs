@@ -10,10 +10,7 @@ pub struct AcquireLease {
     pub session_id: Option<String>,
 }
 
-pub fn acquire_lease(
-    state: &mut RepositoryState,
-    input: AcquireLease,
-) -> WorkspaceLease {
+pub fn acquire_lease(state: &mut RepositoryState, input: AcquireLease) -> WorkspaceLease {
     let timestamp = now_iso();
     if let Some(session_id) = &input.session_id {
         if let Some(existing) = state.leases.iter_mut().find(|lease| {
@@ -58,11 +55,7 @@ pub fn release_lease(state: &mut RepositoryState, lease_id: &str) -> Result<Work
     Ok(state.leases.remove(index))
 }
 
-pub fn release_session_lease(
-    state: &mut RepositoryState,
-    session_id: &str,
-    workspace_id: Option<&str>,
-) {
+pub fn release_session_lease(state: &mut RepositoryState, session_id: &str, workspace_id: Option<&str>) {
     state.leases.retain(|lease| {
         lease.session_id.as_deref() != Some(session_id)
             || workspace_id.is_some_and(|workspace| workspace != lease.workspace_id)

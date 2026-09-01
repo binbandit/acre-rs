@@ -46,10 +46,7 @@ pub fn parse_pull_request_selector(selector: &str) -> Option<u64> {
         .and_then(|value| value.parse().ok())
 }
 
-pub fn resolve_pull_request(
-    repository: &Repository,
-    selector: &str,
-) -> Result<PullRequestTarget> {
+pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<PullRequestTarget> {
     let hosted = repository
         .remote_url
         .as_deref()
@@ -66,14 +63,15 @@ pub fn resolve_pull_request(
     let repo_slug = format!("{}/{}", hosted.owner, hosted.repo);
     let result = run_process(
         "gh",
-        vec![
+        &[
             "pr".into(),
             "view".into(),
             selector.into(),
             "--repo".into(),
             repo_slug.clone(),
             "--json".into(),
-            "number,title,author,url,baseRefName,headRefName,headRefOid,isCrossRepository,headRepository".into(),
+            "number,title,author,url,baseRefName,headRefName,headRefOid,isCrossRepository,headRepository"
+                .into(),
         ],
         RunOptions {
             cwd: Some(&repository.top_level),
@@ -128,6 +126,5 @@ pub fn ensure_pull_request_object(
         &format!("refs/pull/{}/head", pull_request.number),
         Some(&destination),
     )?;
-    Ok(resolve_oid(&repository.top_level, &destination)?
-        .unwrap_or_else(|| pull_request.head_oid.clone()))
+    Ok(resolve_oid(&repository.top_level, &destination)?.unwrap_or_else(|| pull_request.head_oid.clone()))
 }

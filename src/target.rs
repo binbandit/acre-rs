@@ -5,8 +5,7 @@ use crate::error::{AcreError, Result, exit};
 use crate::git::operations::fetch_ref;
 use crate::git::refs::{list_refs, resolve_oid, validate_branch_name};
 use crate::model::{
-    GitRefKind, Repository, RepositoryState, ResolvedTarget, StoredTarget, TargetKind,
-    TrustLevel,
+    GitRefKind, Repository, RepositoryState, ResolvedTarget, StoredTarget, TargetKind, TrustLevel,
 };
 use crate::provider::github::{
     ensure_pull_request_object, parse_pull_request_selector, resolve_pull_request,
@@ -31,11 +30,9 @@ pub fn resolve_existing_target(
                         .as_ref()
                         .is_some_and(|pull_request| pull_request.number == number)
             }) {
-                if let Some(worktree) = repository
-                    .worktrees
-                    .iter()
-                    .find(|worktree| canonical_or_absolute(&worktree.path) == canonical_or_absolute(&existing.path))
-                {
+                if let Some(worktree) = repository.worktrees.iter().find(|worktree| {
+                    canonical_or_absolute(&worktree.path) == canonical_or_absolute(&existing.path)
+                }) {
                     let mut target = from_stored(&existing.target, existing.trust);
                     target.kind = TargetKind::Worktree;
                     target.existing_worktree = Some(worktree.clone());
@@ -65,15 +62,13 @@ pub fn resolve_existing_target(
     }
 
     let path_value = Path::new(value);
-    if let Some(worktree) = repository.worktrees.iter().find(|worktree| {
-        match typed.kind {
-            SelectorKind::Worktree => canonical_or_absolute(&worktree.path) == canonical_or_absolute(path_value),
-            SelectorKind::Remote => false,
-            _ => {
-                worktree.branch.as_deref() == Some(value)
-                    || (typed.kind == SelectorKind::Auto
-                        && canonical_or_absolute(&worktree.path) == canonical_or_absolute(path_value))
-            }
+    if let Some(worktree) = repository.worktrees.iter().find(|worktree| match typed.kind {
+        SelectorKind::Worktree => canonical_or_absolute(&worktree.path) == canonical_or_absolute(path_value),
+        SelectorKind::Remote => false,
+        _ => {
+            worktree.branch.as_deref() == Some(value)
+                || (typed.kind == SelectorKind::Auto
+                    && canonical_or_absolute(&worktree.path) == canonical_or_absolute(path_value))
         }
     }) {
         let stored = state.workspaces.iter().find(|workspace| {
@@ -87,7 +82,9 @@ pub fn resolve_existing_target(
                 .or_else(|| stored.map(|workspace| workspace.target.display_name.clone()))
                 .unwrap_or_else(|| value.to_owned()),
             oid: worktree.head.clone(),
-            trust: stored.map(|workspace| workspace.trust).unwrap_or(TrustLevel::Trusted),
+            trust: stored
+                .map(|workspace| workspace.trust)
+                .unwrap_or(TrustLevel::Trusted),
             existing_worktree: Some(worktree.clone()),
             local_branch: worktree.branch.clone(),
             remote_branch: None,
@@ -120,9 +117,10 @@ pub fn resolve_existing_target(
 
     let explicit = refs.iter().find(|reference| {
         reference.kind == GitRefKind::Remote
-            && reference.remote.as_ref().is_some_and(|remote| {
-                format!("{remote}/{}", reference.short_name) == value
-            })
+            && reference
+                .remote
+                .as_ref()
+                .is_some_and(|remote| format!("{remote}/{}", reference.short_name) == value)
     });
     let matches: Vec<_> = if let Some(explicit) = explicit {
         vec![explicit]
@@ -130,9 +128,7 @@ pub fn resolve_existing_target(
         Vec::new()
     } else {
         refs.iter()
-            .filter(|reference| {
-                reference.kind == GitRefKind::Remote && reference.short_name == value
-            })
+            .filter(|reference| reference.kind == GitRefKind::Remote && reference.short_name == value)
             .collect()
     };
 
@@ -169,7 +165,11 @@ pub fn resolve_existing_target(
         .filter_map(|worktree| worktree.branch.clone())
         .chain(refs.iter().map(|reference| match reference.kind {
             GitRefKind::Local => reference.short_name.clone(),
-            GitRefKind::Remote => format!("{}/{}", reference.remote.as_deref().unwrap_or(""), reference.short_name),
+            GitRefKind::Remote => format!(
+                "{}/{}",
+                reference.remote.as_deref().unwrap_or(""),
+                reference.short_name
+            ),
         }))
         .collect();
     Err(AcreError::new(
@@ -198,8 +198,13 @@ pub fn resolve_new_target(
         .with_details(serde_json::json!({ "branch": branch })));
     }
     let refs = list_refs(&repository.top_level)?;
-    if repository.worktrees.iter().any(|worktree| worktree.branch.as_deref() == Some(branch))
-        || refs.iter().any(|reference| reference.kind == GitRefKind::Local && reference.short_name == branch)
+    if repository
+        .worktrees
+        .iter()
+        .any(|worktree| worktree.branch.as_deref() == Some(branch))
+        || refs
+            .iter()
+            .any(|reference| reference.kind == GitRefKind::Local && reference.short_name == branch)
     {
         return Err(AcreError::new(
             "ACRE_BRANCH_EXISTS",
@@ -218,12 +223,19 @@ pub fn resolve_new_target(
     } else if let Some(from) = from {
         from.to_owned()
     } else if let Some(default_branch) = &repository.default_branch {
-        let remote_candidate = repository.remote.as_ref().map(|remote| format!("{remote}/{default_branch}"));
+        let remote_candidate = repository
+            .remote
+            .as_ref()
+            .map(|remote| format!("{remote}/{default_branch}"));
         remote_candidate
-            .filter(|candidate| refs.iter().any(|reference| {
-                reference.kind == GitRefKind::Remote
-                    && reference.remote.as_ref().is_some_and(|remote| format!("{remote}/{}", reference.short_name) == candidate.as_str())
-            }))
+            .filter(|candidate| {
+                refs.iter().any(|reference| {
+                    reference.kind == GitRefKind::Remote
+                        && reference.remote.as_ref().is_some_and(|remote| {
+                            format!("{remote}/{}", reference.short_name) == candidate.as_str()
+                        })
+                })
+            })
             .unwrap_or_else(|| default_branch.clone())
     } else {
         "HEAD".to_owned()
@@ -276,7 +288,10 @@ fn from_stored(target: &StoredTarget, trust: TrustLevel) -> ResolvedTarget {
         existing_worktree: None,
         local_branch: target.local_branch.clone(),
         remote_branch: target.remote_branch.clone(),
-        remote: target.remote_branch.as_ref().and_then(|value| value.split_once('/').map(|(remote, _)| remote.to_owned())),
+        remote: target
+            .remote_branch
+            .as_ref()
+            .and_then(|value| value.split_once('/').map(|(remote, _)| remote.to_owned())),
         base_ref: None,
         pull_request: target.pull_request.clone(),
     }
@@ -309,10 +324,16 @@ fn parse_typed_selector(selector: &str) -> Result<TypedSelector> {
                     exit::USAGE,
                 ));
             }
-            return Ok(TypedSelector { kind, value: value.to_owned() });
+            return Ok(TypedSelector {
+                kind,
+                value: value.to_owned(),
+            });
         }
     }
-    Ok(TypedSelector { kind: SelectorKind::Auto, value: selector.to_owned() })
+    Ok(TypedSelector {
+        kind: SelectorKind::Auto,
+        value: selector.to_owned(),
+    })
 }
 
 fn closest(needle: &str, candidates: &[String]) -> Vec<String> {
@@ -325,7 +346,11 @@ fn closest(needle: &str, candidates: &[String]) -> Vec<String> {
         })
         .collect();
     matches.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
-    matches.into_iter().take(5).map(|(_, value)| value.clone()).collect()
+    matches
+        .into_iter()
+        .take(5)
+        .map(|(_, value)| value.clone())
+        .collect()
 }
 
 fn similarity(needle: &str, candidate: &str) -> i32 {
@@ -334,15 +359,13 @@ fn similarity(needle: &str, candidate: &str) -> i32 {
     }
     let mut needle_chars = needle.chars();
     let mut current = needle_chars.next();
-    let mut matched = 0;
     for character in candidate.chars() {
         if current == Some(character) {
-            matched += 1;
             current = needle_chars.next();
             if current.is_none() {
                 return 50 - candidate.len() as i32;
             }
         }
     }
-    if matched == 0 { 0 } else { 0 }
+    0
 }

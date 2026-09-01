@@ -31,7 +31,11 @@ impl<'a> Default for RunOptions<'a> {
 pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -> Result<ProcessResult> {
     let started = Instant::now();
     let mut command = Command::new(executable);
-    command.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if let Some(cwd) = options.cwd {
         command.current_dir(cwd);
     }
@@ -79,7 +83,10 @@ pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -
                 let _ = child.wait();
                 return Err(AcreError::new(
                     "ACRE_PROCESS_TIMEOUT",
-                    format!("{executable} did not finish within {} seconds.", timeout.as_secs()),
+                    format!(
+                        "{executable} did not finish within {} seconds.",
+                        timeout.as_secs()
+                    ),
                     exit::ENVIRONMENT,
                 )
                 .with_details(serde_json::json!({ "executable": executable, "args": args })));
@@ -95,7 +102,9 @@ pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -
     let stderr = stderr_thread.join().unwrap_or_default();
     let status_code = status.code().unwrap_or(1);
     let result = ProcessResult {
-        argv: std::iter::once(executable.to_owned()).chain(args.iter().cloned()).collect(),
+        argv: std::iter::once(executable.to_owned())
+            .chain(args.iter().cloned())
+            .collect(),
         cwd: options.cwd.map(Path::to_path_buf),
         status: status_code,
         stdout,
@@ -111,14 +120,22 @@ pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -
 }
 
 pub fn run_git(cwd: &Path, args: &[&str]) -> Result<ProcessResult> {
-    run_git_with(cwd, args.iter().map(|value| (*value).to_owned()).collect(), RunOptions::default())
+    run_git_with(
+        cwd,
+        args.iter().map(|value| (*value).to_owned()).collect(),
+        RunOptions::default(),
+    )
 }
 
 pub fn run_git_strings(cwd: &Path, args: Vec<String>) -> Result<ProcessResult> {
     run_git_with(cwd, args, RunOptions::default())
 }
 
-pub fn run_git_with(cwd: &Path, args: Vec<String>, mut options: RunOptions<'_>) -> Result<ProcessResult> {
+pub fn run_git_with<'a>(
+    cwd: &'a Path,
+    args: Vec<String>,
+    mut options: RunOptions<'a>,
+) -> Result<ProcessResult> {
     options.cwd = Some(cwd);
     run_process("git", &args, options)
 }
@@ -147,16 +164,28 @@ pub fn decode_stdout(result: &ProcessResult) -> String {
 
 fn process_failure(result: ProcessResult) -> AcreError {
     let stderr = String::from_utf8_lossy(&result.stderr).trim().to_owned();
-    let executable = result.argv.first().cloned().unwrap_or_else(|| "process".to_owned());
+    let executable = result
+        .argv
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "process".to_owned());
     let message = if stderr.is_empty() {
         format!("{executable} exited with status {}.", result.status)
     } else {
         stderr.clone()
     };
     AcreError::new(
-        if executable == "git" { "ACRE_GIT_FAILED" } else { "ACRE_PROCESS_FAILED" },
+        if executable == "git" {
+            "ACRE_GIT_FAILED"
+        } else {
+            "ACRE_PROCESS_FAILED"
+        },
         message,
-        if executable == "git" { exit::GIT } else { exit::ENVIRONMENT },
+        if executable == "git" {
+            exit::GIT
+        } else {
+            exit::ENVIRONMENT
+        },
     )
     .with_details(serde_json::json!({
         "argv": result.argv,

@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 use std::process::Command;
 
 use serde_json::{Map, Value, json};
@@ -139,7 +138,10 @@ fn canonical(value: &Value) -> Value {
     match value {
         Value::Array(values) => Value::Array(values.iter().map(canonical).collect()),
         Value::Object(object) => {
-            let sorted: BTreeMap<String, Value> = object.iter().map(|(key, value)| (key.clone(), canonical(value))).collect();
+            let sorted: BTreeMap<String, Value> = object
+                .iter()
+                .map(|(key, value)| (key.clone(), canonical(value)))
+                .collect();
             Value::Object(sorted.into_iter().collect())
         }
         _ => value.clone(),
@@ -152,7 +154,14 @@ fn os_major() -> String {
         .output()
         .ok()
         .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().split('.').next().unwrap_or("unknown").to_owned())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .split('.')
+                .next()
+                .unwrap_or("unknown")
+                .to_owned()
+        })
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
@@ -177,6 +186,9 @@ mod tests {
     fn package_json_script_noise_is_ignored() {
         let a = br#"{"scripts":{"test":"one","postinstall":"x"},"dependencies":{"a":"1"}}"#;
         let b = br#"{"scripts":{"test":"two","postinstall":"x"},"dependencies":{"a":"1"}}"#;
-        assert_eq!(normalize_fingerprint_content("package.json", a), normalize_fingerprint_content("package.json", b));
+        assert_eq!(
+            normalize_fingerprint_content("package.json", a),
+            normalize_fingerprint_content("package.json", b)
+        );
     }
 }

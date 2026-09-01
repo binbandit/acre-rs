@@ -58,7 +58,10 @@ pub fn seed_environment(
     snapshot.cloned_files = Some(cloned_files);
     snapshot.cloned_bytes = Some(cloned_bytes);
     snapshot.clone_mode = Some(clone_mode);
-    Ok(SeedResult { snapshot, seeded_files })
+    Ok(SeedResult {
+        snapshot,
+        seeded_files,
+    })
 }
 
 pub fn seed_files_only(
@@ -107,7 +110,12 @@ pub fn clear_seed_files(root: &Path, files: &[String]) -> Result<()> {
 fn is_ignored_seed(source_root: &Path, relative: &str) -> Result<bool> {
     let result = run_git_with(
         source_root,
-        vec!["check-ignore".into(), "--quiet".into(), "--".into(), relative.into()],
+        vec![
+            "check-ignore".into(),
+            "--quiet".into(),
+            "--".into(),
+            relative.into(),
+        ],
         RunOptions {
             timeout: Some(Duration::from_secs(10)),
             accepted_statuses: &[0, 1, 128],
@@ -137,7 +145,11 @@ pub fn clone_tree(source: &Path, destination: &Path) -> Result<CloneReport> {
     if let Some(report) = clone_with_platform_tool(source, destination) {
         return Ok(report);
     }
-    let mut report = CloneReport { mode: CloneMode::Reflink, files: 0, bytes: 0 };
+    let mut report = CloneReport {
+        mode: CloneMode::Reflink,
+        files: 0,
+        bytes: 0,
+    };
     clone_recursively(source, destination, &mut report)?;
     Ok(report)
 }
@@ -146,7 +158,11 @@ fn clone_with_platform_tool(source: &Path, destination: &Path) -> Option<CloneRe
     let (program, args) = if cfg!(target_os = "macos") {
         (
             "/bin/cp",
-            vec!["-cR".to_owned(), source.display().to_string(), destination.display().to_string()],
+            vec![
+                "-cR".to_owned(),
+                source.display().to_string(),
+                destination.display().to_string(),
+            ],
         )
     } else if cfg!(target_os = "linux") {
         (
@@ -169,7 +185,11 @@ fn clone_with_platform_tool(source: &Path, destination: &Path) -> Option<CloneRe
             ..RunOptions::default()
         },
     ) {
-        Ok(_) => Some(CloneReport { mode: CloneMode::Reflink, files: 0, bytes: 0 }),
+        Ok(_) => Some(CloneReport {
+            mode: CloneMode::Reflink,
+            files: 0,
+            bytes: 0,
+        }),
         Err(_) => {
             let _ = remove_path(destination);
             None
@@ -217,8 +237,12 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
         .map_err(|error| AcreError::io(format!("could not read symlink {}", source.display()), error))?;
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&target, destination)
-            .map_err(|error| AcreError::io(format!("could not create symlink {}", destination.display()), error))?;
+        std::os::unix::fs::symlink(&target, destination).map_err(|error| {
+            AcreError::io(
+                format!("could not create symlink {}", destination.display()),
+                error,
+            )
+        })?;
     }
     #[cfg(windows)]
     {
@@ -228,11 +252,19 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
         } else {
             std::os::windows::fs::symlink_file(&target, destination)
         };
-        result.map_err(|error| AcreError::io(format!("could not create symlink {}", destination.display()), error))?;
+        result.map_err(|error| {
+            AcreError::io(
+                format!("could not create symlink {}", destination.display()),
+                error,
+            )
+        })?;
     }
     Ok(())
 }
 
 pub fn find_copy_source(candidates: &[PathBuf], excluded: &Path) -> Option<PathBuf> {
-    candidates.iter().find(|path| path.as_path() != excluded && path.exists()).cloned()
+    candidates
+        .iter()
+        .find(|path| path.as_path() != excluded && path.exists())
+        .cloned()
 }

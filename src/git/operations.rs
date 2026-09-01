@@ -88,25 +88,44 @@ pub fn bind_target(repository: &Repository, workspace_path: &Path, target: &Reso
     match target.kind {
         TargetKind::NewBranch => {
             let branch = target.local_branch.as_deref().ok_or_else(|| {
-                AcreError::new("ACRE_TARGET_INVALID", "New branch target is incomplete.", exit::INTERNAL)
+                AcreError::new(
+                    "ACRE_TARGET_INVALID",
+                    "New branch target is incomplete.",
+                    exit::INTERNAL,
+                )
             })?;
             git_switch(workspace_path, &["switch", "--create", branch, &target.oid])?;
         }
         TargetKind::LocalBranch => {
             let branch = target.local_branch.as_deref().ok_or_else(|| {
-                AcreError::new("ACRE_TARGET_INVALID", "Local branch target is incomplete.", exit::INTERNAL)
+                AcreError::new(
+                    "ACRE_TARGET_INVALID",
+                    "Local branch target is incomplete.",
+                    exit::INTERNAL,
+                )
             })?;
             git_switch(workspace_path, &["switch", branch])?;
         }
         TargetKind::RemoteBranch => {
             let branch = target.local_branch.as_deref().ok_or_else(|| {
-                AcreError::new("ACRE_TARGET_INVALID", "Remote branch target is incomplete.", exit::INTERNAL)
+                AcreError::new(
+                    "ACRE_TARGET_INVALID",
+                    "Remote branch target is incomplete.",
+                    exit::INTERNAL,
+                )
             })?;
             let remote_branch = target.remote_branch.as_deref().ok_or_else(|| {
-                AcreError::new("ACRE_TARGET_INVALID", "Remote branch target is incomplete.", exit::INTERNAL)
+                AcreError::new(
+                    "ACRE_TARGET_INVALID",
+                    "Remote branch target is incomplete.",
+                    exit::INTERNAL,
+                )
             })?;
             git_switch(workspace_path, &["switch", "--create", branch, &target.oid])?;
-            git_switch(workspace_path, &["branch", "--set-upstream-to", remote_branch, branch])?;
+            git_switch(
+                workspace_path,
+                &["branch", "--set-upstream-to", remote_branch, branch],
+            )?;
         }
         TargetKind::PullRequest => git_switch(workspace_path, &["switch", "--detach", &target.oid])?,
         TargetKind::Worktree => {
@@ -181,7 +200,11 @@ pub fn repair_worktrees(repository: &Repository) -> Result<()> {
 pub fn unlock_worktree(repository: &Repository, target_path: &Path) -> Result<()> {
     run_git_with(
         &repository.top_level,
-        vec!["worktree".into(), "unlock".into(), target_path.display().to_string()],
+        vec![
+            "worktree".into(),
+            "unlock".into(),
+            target_path.display().to_string(),
+        ],
         RunOptions {
             timeout: Some(GIT_TIMEOUT),
             ..RunOptions::default()
@@ -190,8 +213,16 @@ pub fn unlock_worktree(repository: &Repository, target_path: &Path) -> Result<()
     Ok(())
 }
 
-pub fn fetch_ref(repository: &Repository, remote: &str, source: &str, destination: Option<&str>) -> Result<()> {
-    let refspec = destination.map_or_else(|| source.to_owned(), |destination| format!("+{source}:{destination}"));
+pub fn fetch_ref(
+    repository: &Repository,
+    remote: &str,
+    source: &str,
+    destination: Option<&str>,
+) -> Result<()> {
+    let refspec = destination.map_or_else(
+        || source.to_owned(),
+        |destination| format!("+{source}:{destination}"),
+    );
     run_git_with(
         &repository.top_level,
         vec!["fetch".into(), "--no-tags".into(), remote.into(), refspec],

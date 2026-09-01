@@ -39,7 +39,10 @@ fn parse_batch(output: &[u8], files: &[&str]) -> BTreeMap<String, Vec<u8>> {
         if header.ends_with(" missing") {
             continue;
         }
-        let size = header.split_whitespace().next_back().and_then(|value| value.parse::<usize>().ok());
+        let size = header
+            .split_whitespace()
+            .next_back()
+            .and_then(|value| value.parse::<usize>().ok());
         let Some(size) = size else {
             continue;
         };

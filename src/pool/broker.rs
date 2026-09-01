@@ -3,41 +3,34 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use crate::environment::clone::{
-    clear_cache_roots, clear_seed_files, seed_environment, seed_files_only,
-};
+use crate::environment::clone::{clear_cache_roots, clear_seed_files, seed_environment, seed_files_only};
 use crate::environment::fingerprint::build_environment_plan;
 use crate::environment::inspect::inspect_environment;
 use crate::environment::seed::snapshot_seed_files;
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::{
-    bind_target, create_detached_worktree, delete_branch_if_expected, detach_workspace,
-    move_worktree, remove_worktree, reset_workspace, restore_stored_target,
+    bind_target, create_detached_worktree, delete_branch_if_expected, detach_workspace, move_worktree,
+    remove_worktree, reset_workspace, restore_stored_target,
 };
 use crate::git::repository::discover_repository;
 use crate::git::status::list_ignored;
 use crate::model::{
     AcreConfig, DoneAssessment, EnvironmentPlan, EnvironmentSnapshot, EnvironmentState,
-    MaterializedWorkspace, Repository, RepositoryState, ResolvedTarget, StoredTarget,
-    TrustLevel, WorkspaceLease, WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot,
-    WorkspaceStatus,
+    MaterializedWorkspace, Repository, RepositoryState, ResolvedTarget, StoredTarget, TrustLevel,
+    WorkspaceLease, WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
 };
 use crate::pool::assessment::{AssessOptions, assess_workspace};
 use crate::state::config::load_repo_config;
 use crate::state::index::remember_repository;
-use crate::state::leases::{
-    AcquireLease, acquire_lease, release_lease, release_session_lease,
-};
+use crate::state::leases::{AcquireLease, acquire_lease, release_lease, release_session_lease};
 use crate::state::lock::RepositoryLock;
 use crate::state::paths::{active_root, repository_lock_path, slots_root};
 use crate::state::repository::{
-    find_workspace_by_path, find_workspace_for_target, load_repository_state,
-    save_repository_state,
+    find_workspace_by_path, find_workspace_for_target, load_repository_state, save_repository_state,
 };
 use crate::target::store_target;
 use crate::util::{
-    branch_slug, canonical_or_absolute, ensure_directory, now_iso, random_short, remove_path,
-    short_hash,
+    branch_slug, canonical_or_absolute, ensure_directory, now_iso, random_short, remove_path, short_hash,
 };
 
 #[derive(Debug, Clone)]
@@ -177,26 +170,12 @@ pub fn materialize_workspace(
                 inspected.source = Some(idle_path.clone());
                 inspected.clone_mode = Some(crate::model::CloneMode::Reuse);
                 environment = inspected;
-                seeded_paths = seed_files_only(
-                    trusted_seed_source,
-                    &active_path,
-                    &plan.seed_files,
-                    target.trust,
-                )?;
-            } else if let Some(source) = find_environment_source(
-                config,
-                &repository,
-                &state,
-                &plan,
-                &active_path,
-            )? {
-                match seed_environment(
-                    &source,
-                    &active_path,
-                    &plan,
-                    target.trust,
-                    trusted_seed_source,
-                ) {
+                seeded_paths =
+                    seed_files_only(trusted_seed_source, &active_path, &plan.seed_files, target.trust)?;
+            } else if let Some(source) =
+                find_environment_source(config, &repository, &state, &plan, &active_path)?
+            {
+                match seed_environment(&source, &active_path, &plan, target.trust, trusted_seed_source) {
                     Ok(seeded) => {
                         environment = seeded.snapshot;
                         seeded_paths = seeded.seeded_files;
@@ -206,12 +185,8 @@ pub fn materialize_workspace(
                     }
                 }
             } else {
-                seeded_paths = seed_files_only(
-                    trusted_seed_source,
-                    &active_path,
-                    &plan.seed_files,
-                    target.trust,
-                )?;
+                seeded_paths =
+                    seed_files_only(trusted_seed_source, &active_path, &plan.seed_files, target.trust)?;
                 environment = inspect_environment(&active_path, &plan);
             }
 
@@ -316,10 +291,17 @@ pub fn warm_repository(
         _ => "HEAD".to_owned(),
     };
     let oid = crate::git::refs::resolve_oid(&repository.top_level, &base_ref)?
-        .or_else(|| repository.current_worktree.as_ref().map(|worktree| worktree.head.clone()))
+        .or_else(|| {
+            repository
+                .current_worktree
+                .as_ref()
+                .map(|worktree| worktree.head.clone())
+        })
         .unwrap_or_else(|| "HEAD".to_owned());
     let plan = build_environment_plan(&repository, &oid, config, &repo_config)?;
-    let requested = requested_slots.unwrap_or(config.pool.min_slots).min(config.pool.max_slots);
+    let requested = requested_slots
+        .unwrap_or(config.pool.min_slots)
+        .min(config.pool.max_slots);
     let mut created = Vec::new();
     while state
         .slots
@@ -493,7 +475,9 @@ pub fn return_workspace(
             final_path = Some(idle_path);
         } else {
             remove_worktree(&repository, &workspace.path, false)?;
-            state.slots.retain(|slot| workspace.slot_id.as_ref() != Some(&slot.id));
+            state
+                .slots
+                .retain(|slot| workspace.slot_id.as_ref() != Some(&slot.id));
         }
         state.workspaces.retain(|candidate| candidate.id != workspace.id);
         state.leases.retain(|lease| lease.workspace_id != workspace.id);
@@ -623,13 +607,19 @@ fn select_slot(
         .collect::<Vec<_>>();
     if let Some(slot) = healthy
         .iter()
-        .filter(|slot| slot.environment.as_ref().is_some_and(|environment| environment.fingerprint == plan.fingerprint))
+        .filter(|slot| {
+            slot.environment
+                .as_ref()
+                .is_some_and(|environment| environment.fingerprint == plan.fingerprint)
+        })
         .max_by_key(|slot| slot.last_used_at.clone())
     {
         return Ok((state, slot.clone()));
     }
     if let Some(slot) = healthy.iter().find(|slot| {
-        slot.environment.as_ref().is_none_or(|environment| environment.state == EnvironmentState::Cold)
+        slot.environment
+            .as_ref()
+            .is_none_or(|environment| environment.state == EnvironmentState::Cold)
     }) {
         return Ok((state, slot.clone()));
     }
@@ -687,14 +677,21 @@ fn find_environment_source(
         .iter()
         .filter(|workspace| {
             workspace.trust == TrustLevel::Trusted
-                && workspace.environment.as_ref().is_some_and(|environment| environment.fingerprint == plan.fingerprint)
+                && workspace
+                    .environment
+                    .as_ref()
+                    .is_some_and(|environment| environment.fingerprint == plan.fingerprint)
         })
         .map(|workspace| workspace.path.clone())
         .chain(
             state
                 .slots
                 .iter()
-                .filter(|slot| slot.environment.as_ref().is_some_and(|environment| environment.fingerprint == plan.fingerprint))
+                .filter(|slot| {
+                    slot.environment
+                        .as_ref()
+                        .is_some_and(|environment| environment.fingerprint == plan.fingerprint)
+                })
                 .map(|slot| slot.path.clone()),
         )
         .collect::<Vec<_>>();
@@ -743,7 +740,12 @@ fn choose_active_path(
         .local_branch
         .as_deref()
         .map(ToOwned::to_owned)
-        .or_else(|| target.pull_request.as_ref().map(|pull_request| format!("pr-{}", pull_request.number)))
+        .or_else(|| {
+            target
+                .pull_request
+                .as_ref()
+                .map(|pull_request| format!("pr-{}", pull_request.number))
+        })
         .unwrap_or_else(|| target.display_name.clone());
     let base = root.join(branch_slug(&name));
     let reserved: BTreeSet<PathBuf> = state
@@ -771,11 +773,7 @@ fn target_path_key(target: &ResolvedTarget) -> String {
     format!("oid:{}", target.oid)
 }
 
-fn external_workspace(
-    repository: &Repository,
-    target: &ResolvedTarget,
-    path: &Path,
-) -> WorkspaceRecord {
+fn external_workspace(repository: &Repository, target: &ResolvedTarget, path: &Path) -> WorkspaceRecord {
     let timestamp = now_iso();
     WorkspaceRecord {
         id: format!("external-{}", random_short(16)),

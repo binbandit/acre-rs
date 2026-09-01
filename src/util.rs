@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
@@ -64,7 +64,9 @@ pub fn absolute(path: &Path) -> PathBuf {
     if expanded.is_absolute() {
         expanded
     } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(expanded)
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(expanded)
     }
 }
 
@@ -117,21 +119,28 @@ pub fn branch_slug(branch: &str) -> String {
         let prefix: String = output.chars().take(62).collect();
         output = format!("{prefix}--{}", short_hash(branch, 8));
     }
-    output.trim_end_matches(|character| character == '.' || character == ' ').to_owned()
+    output.trim_end_matches(['.', ' ']).to_owned()
 }
 
 pub fn repository_slug(name: &str, id: &str) -> String {
     let safe: String = branch_slug(name).chars().take(48).collect();
-    format!("{}-{}", if safe.is_empty() { "repository" } else { &safe }, &id[..id.len().min(8)])
+    format!(
+        "{}-{}",
+        if safe.is_empty() { "repository" } else { &safe },
+        &id[..id.len().min(8)]
+    )
 }
 
 pub fn validate_relative_path(value: &str) -> bool {
     if value.is_empty() || value.contains('\0') || Path::new(value).is_absolute() {
         return false;
     }
-    !Path::new(value)
-        .components()
-        .any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+    !Path::new(value).components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    })
 }
 
 pub fn parse_hosted_remote(remote_url: &str) -> Option<HostedRemote> {
@@ -142,7 +151,11 @@ pub fn parse_hosted_remote(remote_url: &str) -> Option<HostedRemote> {
             let mut parts: Vec<&str> = right.split('/').filter(|part| !part.is_empty()).collect();
             if parts.len() >= 2 {
                 let repo = parts.pop()?.to_owned();
-                return Some(HostedRemote { host, owner: parts.join("/"), repo });
+                return Some(HostedRemote {
+                    host,
+                    owner: parts.join("/"),
+                    repo,
+                });
             }
         }
     }
@@ -154,14 +167,22 @@ pub fn parse_hosted_remote(remote_url: &str) -> Option<HostedRemote> {
     }
     let repo = parts.pop()?.to_owned();
     Some(HostedRemote {
-        host: host.split('@').next_back().unwrap_or(host).split(':').next().unwrap_or(host).to_owned(),
+        host: host
+            .split('@')
+            .next_back()
+            .unwrap_or(host)
+            .split(':')
+            .next()
+            .unwrap_or(host)
+            .to_owned(),
         owner: parts.join("/"),
         repo,
     })
 }
 
 pub fn ensure_directory(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).map_err(|error| AcreError::io(format!("could not create {}", path.display()), error))?;
+    fs::create_dir_all(path)
+        .map_err(|error| AcreError::io(format!("could not create {}", path.display()), error))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -232,14 +253,15 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|error| AcreError::io(format!("could not replace {}", path.display()), error))?;
 
     #[cfg(unix)]
-    if let Ok(directory) = File::open(parent) {
+    if let Ok(directory) = fs::File::open(parent) {
         let _ = directory.sync_all();
     }
     Ok(())
 }
 
 pub fn unique_paths(values: impl IntoIterator<Item = String>) -> Vec<String> {
-    values.into_iter()
+    values
+        .into_iter()
         .map(|value| value.trim_start_matches("./").trim_end_matches('/').to_owned())
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>()
@@ -251,7 +273,7 @@ pub fn shell_quote(value: &Path) -> String {
     let value = value.to_string_lossy();
     #[cfg(windows)]
     {
-        return format!("\"{}\"", value.replace('"', "\\\""));
+        format!("\"{}\"", value.replace('"', "\\\""))
     }
     #[cfg(not(windows))]
     {

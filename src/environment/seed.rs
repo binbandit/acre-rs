@@ -9,7 +9,10 @@ pub fn snapshot_seed_files(root: &Path, files: &[String]) -> Result<Vec<SeedFile
     let mut snapshots = Vec::new();
     for relative in files {
         if let Some(hash) = seed_path_hash(&root.join(relative))? {
-            snapshots.push(SeedFileSnapshot { path: relative.clone(), hash });
+            snapshots.push(SeedFileSnapshot {
+                path: relative.clone(),
+                hash,
+            });
         }
     }
     Ok(snapshots)
@@ -29,7 +32,12 @@ fn seed_path_hash(target: &Path) -> Result<Option<String>> {
     let metadata = match fs::symlink_metadata(target) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(AcreError::io(format!("could not inspect {}", target.display()), error)),
+        Err(error) => {
+            return Err(AcreError::io(
+                format!("could not inspect {}", target.display()),
+                error,
+            ));
+        }
     };
     if metadata.file_type().is_symlink() {
         let value = fs::read_link(target)
@@ -40,7 +48,8 @@ fn seed_path_hash(target: &Path) -> Result<Option<String>> {
         let mut pieces = Vec::new();
         pieces.extend_from_slice(format!("file\0{}\0", permission_marker(&metadata)).as_bytes());
         pieces.extend_from_slice(
-            &fs::read(target).map_err(|error| AcreError::io(format!("could not read {}", target.display()), error))?,
+            &fs::read(target)
+                .map_err(|error| AcreError::io(format!("could not read {}", target.display()), error))?,
         );
         return Ok(Some(sha256(pieces)));
     }

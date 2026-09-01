@@ -10,7 +10,11 @@ pub fn inspect_environment(root: &Path, plan: &EnvironmentPlan) -> EnvironmentSn
         .cloned()
         .collect();
     let state = if plan.cache_roots.is_empty()
-        || (!plan.required_roots.is_empty() && plan.required_roots.iter().all(|root| present_roots.contains(root)))
+        || (!plan.required_roots.is_empty()
+            && plan
+                .required_roots
+                .iter()
+                .all(|root| present_roots.contains(root)))
     {
         EnvironmentState::Ready
     } else if !present_roots.is_empty() {

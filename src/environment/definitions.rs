@@ -35,7 +35,14 @@ pub const ALL_FINGERPRINT_FILES: &[&str] = &[
 const PNPM: EcosystemDefinition = EcosystemDefinition {
     id: "pnpm",
     label: "pnpm",
-    fingerprint_files: &["package.json", "pnpm-lock.yaml", ".nvmrc", ".node-version", ".tool-versions", "mise.toml"],
+    fingerprint_files: &[
+        "package.json",
+        "pnpm-lock.yaml",
+        ".nvmrc",
+        ".node-version",
+        ".tool-versions",
+        "mise.toml",
+    ],
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
     seed_files: &[".env", ".env.local"],
@@ -43,7 +50,13 @@ const PNPM: EcosystemDefinition = EcosystemDefinition {
 const YARN: EcosystemDefinition = EcosystemDefinition {
     id: "yarn",
     label: "Yarn",
-    fingerprint_files: &["package.json", "yarn.lock", ".nvmrc", ".node-version", ".yarnrc.yml"],
+    fingerprint_files: &[
+        "package.json",
+        "yarn.lock",
+        ".nvmrc",
+        ".node-version",
+        ".yarnrc.yml",
+    ],
     cache_roots: &["node_modules", ".yarn/cache", ".yarn/unplugged"],
     required_roots: &["node_modules"],
     seed_files: &[".env", ".env.local"],
@@ -51,7 +64,13 @@ const YARN: EcosystemDefinition = EcosystemDefinition {
 const NPM: EcosystemDefinition = EcosystemDefinition {
     id: "npm",
     label: "npm",
-    fingerprint_files: &["package.json", "package-lock.json", "npm-shrinkwrap.json", ".nvmrc", ".node-version"],
+    fingerprint_files: &[
+        "package.json",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        ".nvmrc",
+        ".node-version",
+    ],
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
     seed_files: &[".env", ".env.local"],
@@ -75,7 +94,12 @@ const TURBO: EcosystemDefinition = EcosystemDefinition {
 const NEXT: EcosystemDefinition = EcosystemDefinition {
     id: "next",
     label: "Next.js",
-    fingerprint_files: &["package.json", "next.config.js", "next.config.mjs", "next.config.ts"],
+    fingerprint_files: &[
+        "package.json",
+        "next.config.js",
+        "next.config.mjs",
+        "next.config.ts",
+    ],
     cache_roots: &[".next/cache"],
     required_roots: &[],
     seed_files: &[],
@@ -83,7 +107,12 @@ const NEXT: EcosystemDefinition = EcosystemDefinition {
 const RUST: EcosystemDefinition = EcosystemDefinition {
     id: "rust",
     label: "Rust",
-    fingerprint_files: &["Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"],
+    fingerprint_files: &[
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain",
+        "rust-toolchain.toml",
+    ],
     cache_roots: &["target"],
     required_roots: &[],
     seed_files: &[".env", ".env.local"],
@@ -91,7 +120,13 @@ const RUST: EcosystemDefinition = EcosystemDefinition {
 const PYTHON: EcosystemDefinition = EcosystemDefinition {
     id: "python",
     label: "Python",
-    fingerprint_files: &["pyproject.toml", "uv.lock", "poetry.lock", "requirements.txt", ".python-version"],
+    fingerprint_files: &[
+        "pyproject.toml",
+        "uv.lock",
+        "poetry.lock",
+        "requirements.txt",
+        ".python-version",
+    ],
     cache_roots: &[".venv", ".pytest_cache", ".mypy_cache", ".ruff_cache"],
     required_roots: &[".venv"],
     seed_files: &[".env", ".env.local"],

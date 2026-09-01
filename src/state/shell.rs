@@ -20,7 +20,10 @@ pub fn record_navigation(
     pid: Option<u32>,
 ) -> Result<()> {
     let current = read_shell_state(config, id)?;
-    let previous = match current.as_ref().and_then(|state| state.current_directory.as_ref()) {
+    let previous = match current
+        .as_ref()
+        .and_then(|state| state.current_directory.as_ref())
+    {
         Some(directory) if directory != to => Some(directory.clone()),
         _ => Some(from.to_path_buf()),
     };
@@ -35,12 +38,7 @@ pub fn record_navigation(
     write_json(&shell_state_path(config, id), &state)
 }
 
-pub fn touch_shell_state(
-    config: &AcreConfig,
-    id: &str,
-    cwd: &Path,
-    pid: Option<u32>,
-) -> Result<()> {
+pub fn touch_shell_state(config: &AcreConfig, id: &str, cwd: &Path, pid: Option<u32>) -> Result<()> {
     let current = read_shell_state(config, id)?;
     let state = ShellSessionState {
         schema_version: 1,
