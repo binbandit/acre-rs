@@ -31,7 +31,8 @@ pub fn pick<T: Clone>(
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Ok(PickerResult::Cancelled);
     }
-    enable_raw_mode().map_err(|error| AcreError::new("ACRE_TERMINAL", error.to_string(), exit::ENVIRONMENT))?;
+    enable_raw_mode()
+        .map_err(|error| AcreError::new("ACRE_TERMINAL", error.to_string(), exit::ENVIRONMENT))?;
     let result = picker_loop(renderer, title, rows);
     let _ = disable_raw_mode();
     let mut stdout = std::io::stdout();
@@ -49,18 +50,31 @@ fn picker_loop<T: Clone>(
     let mut lines_drawn = 0usize;
     loop {
         draw(renderer, title, rows, &filter, selected, &mut lines_drawn)?;
-        let event = read().map_err(|error| AcreError::new("ACRE_TERMINAL", error.to_string(), exit::ENVIRONMENT))?;
+        let event =
+            read().map_err(|error| AcreError::new("ACRE_TERMINAL", error.to_string(), exit::ENVIRONMENT))?;
         let Event::Key(key) = event else { continue };
-        if key.kind != KeyEventKind::Press { continue; }
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
         let visible = visible_rows(rows, &filter);
         match key.code {
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(PickerResult::Interrupted),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Ok(PickerResult::Interrupted);
+            }
             KeyCode::Esc => return Ok(PickerResult::Cancelled),
             KeyCode::Up => {
-                selected = if visible.is_empty() { 0 } else { (selected + visible.len() - 1) % visible.len() };
+                selected = if visible.is_empty() {
+                    0
+                } else {
+                    (selected + visible.len() - 1) % visible.len()
+                };
             }
             KeyCode::Down => {
-                selected = if visible.is_empty() { 0 } else { (selected + 1) % visible.len() };
+                selected = if visible.is_empty() {
+                    0
+                } else {
+                    (selected + 1) % visible.len()
+                };
             }
             KeyCode::Enter => {
                 if let Some(row) = visible.get(selected) {
@@ -71,7 +85,11 @@ fn picker_loop<T: Clone>(
                 filter.pop();
                 selected = 0;
             }
-            KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 filter.push(character);
                 selected = 0;
             }
@@ -100,18 +118,46 @@ fn draw<T>(
     let mut output = vec![format!("<bold>{}</bold>", renderer.value(title)), String::new()];
     let offset = selected.saturating_sub(6);
     for (index, row) in visible.iter().skip(offset).take(13).enumerate() {
-        let marker = if offset + index == selected { "<green>›</green>" } else { " " };
-        let detail = row.detail.as_ref().map(|detail| format!("  <dim>{}</dim>", renderer.value(detail))).unwrap_or_default();
-        output.push(format!("{marker} <blue>{}</blue>{detail}", renderer.value(&row.label)));
+        let marker = if offset + index == selected {
+            "<green>›</green>"
+        } else {
+            " "
+        };
+        let detail = row
+            .detail
+            .as_ref()
+            .map(|detail| format!("  <dim>{}</dim>", renderer.value(detail)))
+            .unwrap_or_default();
+        output.push(format!(
+            "{marker} <blue>{}</blue>{detail}",
+            renderer.value(&row.label)
+        ));
     }
     if visible.is_empty() {
         output.push("  <dim>No matches</dim>".to_owned());
     }
     output.push(String::new());
-    output.push(format!("<dim>{} · ↑↓ select · Enter open · Esc leave</dim>", renderer.value(if filter.is_empty() { "Type to search" } else { filter })));
-    write!(stdout, "{}\n", output.iter().map(|line| renderer.format(line, true)).collect::<Vec<_>>().join("\n"))
+    output.push(format!(
+        "<dim>{} · ↑↓ select · Enter open · Esc leave</dim>",
+        renderer.value(if filter.is_empty() {
+            "Type to search"
+        } else {
+            filter
+        })
+    ));
+    writeln!(
+        stdout,
+        "{}",
+        output
+            .iter()
+            .map(|line| renderer.format(line, true))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+    .map_err(|error| AcreError::io("could not draw picker", error))?;
+    stdout
+        .flush()
         .map_err(|error| AcreError::io("could not draw picker", error))?;
-    stdout.flush().map_err(|error| AcreError::io("could not draw picker", error))?;
     *lines_drawn = output.len();
     Ok(())
 }
@@ -121,7 +167,9 @@ fn visible_rows<'a, T>(rows: &'a [PickerRow<T>], filter: &str) -> Vec<&'a Picker
     if needle.is_empty() {
         return rows.iter().collect();
     }
-    rows.iter().filter(|row| subsequence(&needle, &row.searchable.to_ascii_lowercase())).collect()
+    rows.iter()
+        .filter(|row| subsequence(&needle, &row.searchable.to_ascii_lowercase()))
+        .collect()
 }
 
 fn subsequence(needle: &str, haystack: &str) -> bool {

@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::error::{AcreError, Result, exit};
 use crate::model::{CommandContext, SupportedShell};
@@ -12,11 +12,7 @@ use crate::util::{ensure_directory, home_dir};
 const START: &str = "# >>> acre >>>";
 const END: &str = "# <<< acre <<<";
 
-pub fn command_setup(
-    context: &CommandContext,
-    shell: Option<SupportedShell>,
-    yes: bool,
-) -> Result<i32> {
+pub fn command_setup(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -> Result<i32> {
     let renderer = Renderer::new(context);
     let shell = shell.unwrap_or_else(detect_shell);
     let rc = shell_config_path(shell);
@@ -25,13 +21,25 @@ pub fn command_setup(
     let next = install_block(&current, &desired);
     let changed = next != current;
     let approved = if changed {
-        yes || !context.interactive || confirm(&renderer, &format!("{} Acre shell integration in {}?", if current.contains(START) { "Update" } else { "Add" }, rc.display()), true)?
+        yes || !context.interactive
+            || confirm(
+                &renderer,
+                &format!(
+                    "{} Acre shell integration in {}?",
+                    if current.contains(START) { "Update" } else { "Add" },
+                    rc.display()
+                ),
+                true,
+            )?
     } else {
         true
     };
     if approved && changed {
-        if let Some(parent) = rc.parent() { ensure_directory(parent)?; }
-        fs::write(&rc, next).map_err(|error| AcreError::io(format!("could not write {}", rc.display()), error))?;
+        if let Some(parent) = rc.parent() {
+            ensure_directory(parent)?;
+        }
+        fs::write(&rc, next)
+            .map_err(|error| AcreError::io(format!("could not write {}", rc.display()), error))?;
     }
     ensure_default_config_file()?;
     let config = load_config()?;
@@ -48,15 +56,29 @@ pub fn command_setup(
         renderer.line("<bold>Acre setup</bold>");
         renderer.line("");
         renderer.line(format!("  Shell       <blue>{:?}</blue>", shell));
-        renderer.line(format!("  Config      <dim>{}</dim>", renderer.value(config_path().display().to_string())));
-        renderer.line(format!("  Workspaces  <dim>{}</dim>", renderer.value(config.root.display().to_string())));
+        renderer.line(format!(
+            "  Config      <dim>{}</dim>",
+            renderer.value(config_path().display().to_string())
+        ));
+        renderer.line(format!(
+            "  Workspaces  <dim>{}</dim>",
+            renderer.value(config.root.display().to_string())
+        ));
         renderer.line("");
         if !approved {
             renderer.line("<yellow>Shell integration was not changed.</yellow>");
         } else if !changed {
             renderer.line("<green>Shell integration is already current.</green>");
         } else {
-            renderer.line(format!("<green>{} shell integration in {}.</green>", if current.contains(START) { "Updated" } else { "Added" }, renderer.value(rc.display().to_string())));
+            renderer.line(format!(
+                "<green>{} shell integration in {}.</green>",
+                if current.contains(START) {
+                    "Updated"
+                } else {
+                    "Added"
+                },
+                renderer.value(rc.display().to_string())
+            ));
         }
         renderer.line("Restart this shell, then open existing work with <blue>acre</blue> or start new work with <blue>acre new feature/name</blue>.");
     }
@@ -85,7 +107,9 @@ fn shell_config_path(shell: SupportedShell) -> PathBuf {
             .unwrap_or_else(|| home_dir().join(".config"))
             .join("fish/config.fish"),
         SupportedShell::Bash => home_dir().join(".bashrc"),
-        SupportedShell::Powershell => home_dir().join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+        SupportedShell::Powershell => {
+            home_dir().join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1")
+        }
         SupportedShell::Zsh => home_dir().join(".zshrc"),
     }
 }
@@ -106,6 +130,10 @@ fn install_block(current: &str, desired: &str) -> String {
             return format!("{}{}{}", &current[..start], desired, &current[end..]);
         }
     }
-    let separator = if current.is_empty() || current.ends_with('\n') { "" } else { "\n" };
+    let separator = if current.is_empty() || current.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
     format!("{current}{separator}{desired}\n")
 }

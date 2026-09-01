@@ -4,10 +4,8 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::commands;
-use crate::error::{AcreError, Result, exit};
-use crate::model::{
-    CommandContext, GlobalOptions, OutputMode, ShellBridge, SupportedShell,
-};
+use crate::error::{AcreError, Result};
+use crate::model::{CommandContext, GlobalOptions, OutputMode, ShellBridge, SupportedShell};
 use crate::ui::errors::render_failure;
 
 #[derive(Debug, Parser)]
@@ -230,19 +228,13 @@ pub fn run() -> i32 {
 fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
     match cli.command {
         None => commands::open::command_open(context, cli.target.as_deref(), &cli.program),
-        Some(Command::New(args)) => commands::new::command_new(
-            context,
-            &args.branch,
-            args.from.as_deref(),
-            args.fresh,
-            args.stay,
-        ),
+        Some(Command::New(args)) => {
+            commands::new::command_new(context, &args.branch, args.from.as_deref(), args.fresh, args.stay)
+        }
         Some(Command::Done(args)) => commands::done::command_done(context, args.target.as_deref()),
-        Some(Command::Setup(args)) => commands::setup::command_setup(
-            context,
-            args.shell.map(Into::into),
-            args.yes,
-        ),
+        Some(Command::Setup(args)) => {
+            commands::setup::command_setup(context, args.shell.map(Into::into), args.yes)
+        }
         Some(Command::Acquire(args)) => commands::machine::command_acquire(
             context,
             &args.target,
@@ -252,11 +244,9 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
             args.from.as_deref(),
             args.fresh,
         ),
-        Some(Command::Release(args)) => commands::machine::command_release(
-            context,
-            &args.lease_id,
-            args.keep_active,
-        ),
+        Some(Command::Release(args)) => {
+            commands::machine::command_release(context, &args.lease_id, args.keep_active)
+        }
         Some(Command::System(args)) => match args.command {
             SystemCommand::Warm { slots } => commands::system::command_system_warm(context, slots),
             SystemCommand::Inspect => commands::system::command_system_inspect(context),
@@ -278,23 +268,36 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
         Some(Command::Completion(args)) => commands::shell::command_completion(context, args.shell.into()),
         Some(Command::SessionId) => commands::internal::command_session_id(context),
         Some(Command::Resume { token }) => commands::internal::command_resume(context, &token),
-        Some(Command::Replenish { common_dir }) => commands::internal::command_replenish(context, &common_dir),
-        Some(Command::Complete { token }) => commands::internal::command_complete(context, token.as_deref().unwrap_or("")),
+        Some(Command::Replenish { common_dir }) => commands::internal::command_replenish(&common_dir),
+        Some(Command::Complete { token }) => {
+            commands::internal::command_complete(context, token.as_deref().unwrap_or(""))
+        }
     }
 }
 
 fn create_context(cli: &Cli) -> Result<CommandContext> {
     let cwd = match &cli.directory {
         Some(directory) => crate::util::canonical_or_absolute(directory),
-        None => std::env::current_dir().map_err(|error| AcreError::io("could not read current directory", error))?,
+        None => std::env::current_dir()
+            .map_err(|error| AcreError::io("could not read current directory", error))?,
     };
-    let session_id = std::env::var("ACRE_SHELL_SESSION_ID").ok().filter(|value| !value.is_empty());
+    let session_id = std::env::var("ACRE_SHELL_SESSION_ID")
+        .ok()
+        .filter(|value| !value.is_empty());
     let directive_file = std::env::var_os("ACRE_DIRECTIVE_FILE").map(PathBuf::from);
-    let pid = std::env::var("ACRE_SHELL_PID").ok().and_then(|value| value.parse().ok());
+    let pid = std::env::var("ACRE_SHELL_PID")
+        .ok()
+        .and_then(|value| value.parse().ok());
     Ok(CommandContext {
         cwd,
-        interactive: !cli.json && std::io::IsTerminal::is_terminal(&std::io::stdin()) && std::io::IsTerminal::is_terminal(&std::io::stdout()),
-        output_mode: if cli.json { OutputMode::Json } else { OutputMode::Human },
+        interactive: !cli.json
+            && std::io::IsTerminal::is_terminal(&std::io::stdin())
+            && std::io::IsTerminal::is_terminal(&std::io::stdout()),
+        output_mode: if cli.json {
+            OutputMode::Json
+        } else {
+            OutputMode::Human
+        },
         global: GlobalOptions {
             directory: cli.directory.clone(),
             json: cli.json,
@@ -315,7 +318,11 @@ fn fallback_context(cli: &Cli) -> CommandContext {
     CommandContext {
         cwd: PathBuf::from("."),
         interactive: false,
-        output_mode: if cli.json { OutputMode::Json } else { OutputMode::Human },
+        output_mode: if cli.json {
+            OutputMode::Json
+        } else {
+            OutputMode::Human
+        },
         global: GlobalOptions {
             directory: cli.directory.clone(),
             json: cli.json,
@@ -323,6 +330,11 @@ fn fallback_context(cli: &Cli) -> CommandContext {
             plain: cli.plain,
             verbose: cli.verbose,
         },
-        shell: ShellBridge { active: false, directive_file: None, session_id: None, pid: None },
+        shell: ShellBridge {
+            active: false,
+            directive_file: None,
+            session_id: None,
+            pid: None,
+        },
     }
 }

@@ -5,9 +5,7 @@ use crate::state::config::load_config;
 use crate::state::repository::load_repository_state;
 use crate::util::canonical_or_absolute;
 
-pub fn command_environment(
-    context: &CommandContext,
-) -> Result<(AcreConfig, Repository, RepositoryState)> {
+pub fn command_environment(context: &CommandContext) -> Result<(AcreConfig, Repository, RepositoryState)> {
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let state = load_repository_state(&config, &repository)?;
@@ -19,9 +17,10 @@ pub fn current_workspace<'a>(
     state: &'a RepositoryState,
 ) -> Option<&'a WorkspaceRecord> {
     let current_path = repository.current_worktree.as_ref()?.path.as_path();
-    state.workspaces.iter().find(|workspace| {
-        canonical_or_absolute(&workspace.path) == canonical_or_absolute(current_path)
-    })
+    state
+        .workspaces
+        .iter()
+        .find(|workspace| canonical_or_absolute(&workspace.path) == canonical_or_absolute(current_path))
 }
 
 pub fn require_current_workspace(
@@ -31,7 +30,11 @@ pub fn require_current_workspace(
     if let Some(workspace) = current_workspace(repository, state) {
         return Ok(workspace.clone());
     }
-    if repository.current_worktree.as_ref().is_some_and(|worktree| worktree.is_main) {
+    if repository
+        .current_worktree
+        .as_ref()
+        .is_some_and(|worktree| worktree.is_main)
+    {
         return Err(AcreError::new(
             "ACRE_PRIMARY_WORKTREE",
             "The repository's primary worktree cannot be returned to Acre.",

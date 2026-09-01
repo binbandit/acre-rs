@@ -10,20 +10,11 @@ pub fn write_cd_directive(context: &CommandContext, target: &Path) -> Result<()>
     write_directive(context, "cd", target, None)
 }
 
-pub fn write_resume_directive(
-    context: &CommandContext,
-    destination: &Path,
-    token: &str,
-) -> Result<()> {
+pub fn write_resume_directive(context: &CommandContext, destination: &Path, token: &str) -> Result<()> {
     write_directive(context, "resume-after-cd", destination, Some(token))
 }
 
-fn write_directive(
-    context: &CommandContext,
-    action: &str,
-    target: &Path,
-    token: Option<&str>,
-) -> Result<()> {
+fn write_directive(context: &CommandContext, action: &str, target: &Path, token: Option<&str>) -> Result<()> {
     let path = context.shell.directive_file.as_ref().ok_or_else(|| {
         AcreError::new(
             "ACRE_SHELL_INTEGRATION_REQUIRED",

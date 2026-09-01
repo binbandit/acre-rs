@@ -22,7 +22,10 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let state = load_repository_state(&config, &repository)?;
-    let current_path = repository.current_worktree.as_ref().map(|worktree| worktree.path.clone());
+    let current_path = repository
+        .current_worktree
+        .as_ref()
+        .map(|worktree| worktree.path.clone());
 
     let target_path = if let Some(selector) = selector {
         let target = resolve_existing_target(&repository, &state, selector)?;
@@ -71,10 +74,15 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
         )
         .with_details(serde_json::json!({ "path": target_path })));
     }
-    let is_current = current_path.as_ref().is_some_and(|current| canonical_or_absolute(current) == canonical_or_absolute(&target_path))
+    let is_current = current_path
+        .as_ref()
+        .is_some_and(|current| canonical_or_absolute(current) == canonical_or_absolute(&target_path))
         && is_inside(&target_path, &context.cwd);
 
-    if workspace.as_ref().is_none_or(|workspace| workspace.ownership == WorkspaceOwnership::External) {
+    if workspace
+        .as_ref()
+        .is_none_or(|workspace| workspace.ownership == WorkspaceOwnership::External)
+    {
         let renderer = Renderer::new(context);
         if context.global.json {
             renderer.json(&serde_json::json!({
@@ -87,15 +95,29 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
             return Ok(exit::SUCCESS);
         }
         if !is_current {
-            renderer.line(format!("<dim>External worktree {} was left untouched.</dim>", renderer.value(selector.unwrap_or_else(|| target_path.to_str().unwrap_or("worktree")))));
+            renderer.line(format!(
+                "<dim>External worktree {} was left untouched.</dim>",
+                renderer.value(selector.unwrap_or_else(|| target_path.to_str().unwrap_or("worktree")))
+            ));
             return Ok(exit::SUCCESS);
         }
         let destination = safe_destination(context, &config, &repository, &target_path)?;
         if let Some(session_id) = &context.shell.session_id {
             let _ = release_shell_session_lease(&config, &repository, session_id);
         }
-        renderer.line(format!("<dim>External worktree {} was left untouched.</dim>", renderer.value(target_path.file_name().and_then(|value| value.to_str()).unwrap_or("worktree"))));
-        let label = destination.file_name().and_then(|value| value.to_str()).unwrap_or("workspace");
+        renderer.line(format!(
+            "<dim>External worktree {} was left untouched.</dim>",
+            renderer.value(
+                target_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("worktree")
+            )
+        ));
+        let label = destination
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("workspace");
         navigate_direct(context, &config, &destination, label)?;
         return Ok(exit::SUCCESS);
     }
@@ -103,7 +125,10 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
     let assess = AssessOptions {
         allowed_session_id: context.shell.session_id.clone(),
         allowed_lease_id: None,
-        ignored_pids: [Some(std::process::id()), context.shell.pid].into_iter().flatten().collect(),
+        ignored_pids: [Some(std::process::id()), context.shell.pid]
+            .into_iter()
+            .flatten()
+            .collect(),
     };
     let assessment = assess_workspace_for_return(&config, &repository, &workspace.id, &assess)?;
     if !assessment.safe {
@@ -116,10 +141,17 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
             &config,
             &repository,
             &workspace.id,
-            &ReturnOptions { assessment: assess, remove_lease_id: None },
+            &ReturnOptions {
+                assessment: assess,
+                remove_lease_id: None,
+            },
         )?;
         render_done(context, &workspace, result.pooled, result.external);
-        return Ok(if result.returned || result.external { exit::SUCCESS } else { exit::REFUSED });
+        return Ok(if result.returned || result.external {
+            exit::SUCCESS
+        } else {
+            exit::REFUSED
+        });
     }
 
     if !context.shell.active || context.shell.session_id.is_none() {
@@ -185,9 +217,10 @@ pub fn command_resume_done(context: &CommandContext, token: &str) -> Result<i32>
                 exit::CONFLICT,
             )
         })?;
-    let registered = repository.worktrees.iter().find(|worktree| {
-        canonical_or_absolute(&worktree.path) == canonical_or_absolute(&workspace.path)
-    });
+    let registered = repository
+        .worktrees
+        .iter()
+        .find(|worktree| canonical_or_absolute(&worktree.path) == canonical_or_absolute(&workspace.path));
     let status = read_status(&workspace.path)?;
     if registered.is_none_or(|worktree| worktree.head != operation.expected_head)
         || status.fingerprint != operation.expected_status_fingerprint
@@ -208,7 +241,10 @@ pub fn command_resume_done(context: &CommandContext, token: &str) -> Result<i32>
             assessment: AssessOptions {
                 allowed_session_id: operation.current_session_id,
                 allowed_lease_id: None,
-                ignored_pids: [Some(std::process::id()), context.shell.pid].into_iter().flatten().collect(),
+                ignored_pids: [Some(std::process::id()), context.shell.pid]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
             },
             remove_lease_id: None,
         },
@@ -229,7 +265,9 @@ fn safe_destination(
     leaving_path: &Path,
 ) -> Result<PathBuf> {
     if let Some(session_id) = &context.shell.session_id {
-        if let Some(previous) = read_shell_state(config, session_id)?.and_then(|state| state.previous_directory) {
+        if let Some(previous) =
+            read_shell_state(config, session_id)?.and_then(|state| state.previous_directory)
+        {
             if !is_inside(leaving_path, &previous) && previous.is_dir() {
                 return Ok(previous);
             }
@@ -240,7 +278,10 @@ fn safe_destination(
         .iter()
         .find(|worktree| worktree.is_main)
         .or_else(|| repository.worktrees.first())
-        .filter(|worktree| canonical_or_absolute(&worktree.path) != canonical_or_absolute(leaving_path) && worktree.path.exists())
+        .filter(|worktree| {
+            canonical_or_absolute(&worktree.path) != canonical_or_absolute(leaving_path)
+                && worktree.path.exists()
+        })
         .ok_or_else(|| {
             AcreError::new(
                 "ACRE_NO_SAFE_DESTINATION",
@@ -254,7 +295,9 @@ fn safe_destination(
         .ok()
         .filter(|relative| !relative.as_os_str().is_empty())
         .map(|relative| primary.path.join(relative));
-    Ok(candidate.filter(|candidate| candidate.is_dir()).unwrap_or_else(|| primary.path.clone()))
+    Ok(candidate
+        .filter(|candidate| candidate.is_dir())
+        .unwrap_or_else(|| primary.path.clone()))
 }
 
 fn render_unsafe(context: &CommandContext, assessment: &crate::model::DoneAssessment) {
@@ -268,16 +311,39 @@ fn render_unsafe(context: &CommandContext, assessment: &crate::model::DoneAssess
         }));
         return;
     }
-    renderer.line(format!("<bold><yellow>{} is still in use</yellow></bold>", renderer.value(&assessment.workspace.target.display_name)));
+    renderer.line(format!(
+        "<bold><yellow>{} is still in use</yellow></bold>",
+        renderer.value(&assessment.workspace.target.display_name)
+    ));
     renderer.line("");
-    if assessment.status.staged > 0 { renderer.line(format!("  {} staged", assessment.status.staged)); }
-    if assessment.status.modified > 0 { renderer.line(format!("  {} modified", assessment.status.modified)); }
-    if assessment.status.untracked > 0 { renderer.line(format!("  {} untracked", assessment.status.untracked)); }
-    if let Some(operation) = &assessment.operation { renderer.line(format!("  {} in progress", renderer.value(operation))); }
-    for entry in assessment.new_ignored.iter().take(8) { renderer.line(format!("  ignored: {}", renderer.value(entry))); }
-    for entry in assessment.changed_seed_files.iter().take(8) { renderer.line(format!("  changed local file: {}", renderer.value(entry))); }
-    for lease in &assessment.leases { renderer.line(format!("  held by {}", renderer.value(&lease.holder))); }
-    for process in &assessment.processes { renderer.line(format!("  {} (pid {})", renderer.value(&process.command), process.pid)); }
+    if assessment.status.staged > 0 {
+        renderer.line(format!("  {} staged", assessment.status.staged));
+    }
+    if assessment.status.modified > 0 {
+        renderer.line(format!("  {} modified", assessment.status.modified));
+    }
+    if assessment.status.untracked > 0 {
+        renderer.line(format!("  {} untracked", assessment.status.untracked));
+    }
+    if let Some(operation) = &assessment.operation {
+        renderer.line(format!("  {} in progress", renderer.value(operation)));
+    }
+    for entry in assessment.new_ignored.iter().take(8) {
+        renderer.line(format!("  ignored: {}", renderer.value(entry)));
+    }
+    for entry in assessment.changed_seed_files.iter().take(8) {
+        renderer.line(format!("  changed local file: {}", renderer.value(entry)));
+    }
+    for lease in &assessment.leases {
+        renderer.line(format!("  held by {}", renderer.value(&lease.holder)));
+    }
+    for process in &assessment.processes {
+        renderer.line(format!(
+            "  {} (pid {})",
+            renderer.value(&process.command),
+            process.pid
+        ));
+    }
     renderer.line("");
     renderer.line("<dim>Acre left the workspace exactly where it is.</dim>");
 }
@@ -295,12 +361,19 @@ fn render_done(context: &CommandContext, workspace: &WorkspaceRecord, pooled: bo
         }));
         return;
     }
-    renderer.line(format!("<bold><green>Finished with</green></bold> <blue>{}</blue>", renderer.value(&workspace.target.display_name)));
+    renderer.line(format!(
+        "<bold><green>Finished with</green></bold> <blue>{}</blue>",
+        renderer.value(&workspace.target.display_name)
+    ));
     renderer.line("");
     if external {
         renderer.line("<dim>External worktree left untouched</dim>");
     } else {
         renderer.line("<dim>Branch and commits preserved</dim>");
-        renderer.line(if pooled { "<dim>Warm workspace returned to the pool</dim>" } else { "<dim>Workspace directory removed</dim>" });
+        renderer.line(if pooled {
+            "<dim>Warm workspace returned to the pool</dim>"
+        } else {
+            "<dim>Workspace directory removed</dim>"
+        });
     }
 }

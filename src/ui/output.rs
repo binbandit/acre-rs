@@ -16,12 +16,20 @@ impl<'a> Renderer<'a> {
 
     pub fn line(&self, markup: impl AsRef<str>) {
         let mut stdout = std::io::stdout().lock();
-        let _ = writeln!(stdout, "{}", self.format(markup.as_ref(), std::io::stdout().is_terminal()));
+        let _ = writeln!(
+            stdout,
+            "{}",
+            self.format(markup.as_ref(), std::io::stdout().is_terminal())
+        );
     }
 
     pub fn error(&self, markup: impl AsRef<str>) {
         let mut stderr = std::io::stderr().lock();
-        let _ = writeln!(stderr, "{}", self.format(markup.as_ref(), std::io::stderr().is_terminal()));
+        let _ = writeln!(
+            stderr,
+            "{}",
+            self.format(markup.as_ref(), std::io::stderr().is_terminal())
+        );
     }
 
     pub fn json<T: Serialize>(&self, value: &T) {

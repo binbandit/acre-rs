@@ -3,8 +3,8 @@ use crate::git::repository::{discover_repository, discover_repository_from_commo
 use crate::model::CommandContext;
 use crate::pool::assessment::AssessOptions;
 use crate::pool::broker::{
-    LeaseRequest, MaterializeOptions, ReturnOptions, materialize_workspace,
-    release_workspace_lease, return_workspace,
+    LeaseRequest, MaterializeOptions, ReturnOptions, materialize_workspace, release_workspace_lease,
+    return_workspace,
 };
 use crate::state::config::load_config;
 use crate::state::index::load_repository_index;
@@ -61,18 +61,25 @@ pub fn command_acquire(
         renderer.raw(format!("{}\n", result.path.display()));
         renderer.error(format!(
             "<dim>lease {} · {:?}</dim>",
-            renderer.value(result.lease.as_ref().map(|lease| lease.id.as_str()).unwrap_or("none")),
-            result.workspace.environment.as_ref().map(|environment| environment.state).unwrap_or(crate::model::EnvironmentState::Unknown),
+            renderer.value(
+                result
+                    .lease
+                    .as_ref()
+                    .map(|lease| lease.id.as_str())
+                    .unwrap_or("none")
+            ),
+            result
+                .workspace
+                .environment
+                .as_ref()
+                .map(|environment| environment.state)
+                .unwrap_or(crate::model::EnvironmentState::Unknown),
         ));
     }
     Ok(exit::SUCCESS)
 }
 
-pub fn command_release(
-    context: &CommandContext,
-    lease_id: &str,
-    keep_active: bool,
-) -> Result<i32> {
+pub fn command_release(context: &CommandContext, lease_id: &str, keep_active: bool) -> Result<i32> {
     let config = load_config()?;
     for known in load_repository_index(&config)? {
         let Ok(repository) = discover_repository_from_common_dir(&known.common_dir) else {
@@ -82,8 +89,7 @@ pub fn command_release(
         if !state.leases.iter().any(|lease| lease.id == lease_id) {
             continue;
         }
-        let (_lease, released_state, workspace) =
-            release_workspace_lease(&config, &repository, lease_id)?;
+        let (_lease, released_state, workspace) = release_workspace_lease(&config, &repository, lease_id)?;
         let remaining = released_state
             .leases
             .iter()
@@ -121,15 +127,27 @@ pub fn command_release(
                 "assessment": if retained { assessment.as_ref() } else { None },
             }));
         } else {
-            renderer.line(format!("<bold><green>Released</green></bold> <blue>{}</blue>", renderer.value(&workspace.target.display_name)));
+            renderer.line(format!(
+                "<bold><green>Released</green></bold> <blue>{}</blue>",
+                renderer.value(&workspace.target.display_name)
+            ));
             if !retained {
-                renderer.line(if pooled { "<dim>Warm workspace returned to the pool</dim>" } else { "<dim>Workspace directory removed</dim>" });
+                renderer.line(if pooled {
+                    "<dim>Warm workspace returned to the pool</dim>"
+                } else {
+                    "<dim>Workspace directory removed</dim>"
+                });
             } else if keep_active {
                 renderer.line("<dim>Workspace remains active by request</dim>");
             } else if remaining > 0 {
-                renderer.line(format!("<dim>Workspace remains active · {remaining} other lease{}</dim>", if remaining == 1 { "" } else { "s" }));
+                renderer.line(format!(
+                    "<dim>Workspace remains active · {remaining} other lease{}</dim>",
+                    if remaining == 1 { "" } else { "s" }
+                ));
             } else {
-                renderer.line("<dim>Workspace remains active because Acre could not prove it safe to recycle</dim>");
+                renderer.line(
+                    "<dim>Workspace remains active because Acre could not prove it safe to recycle</dim>",
+                );
                 if let Some(assessment) = &assessment {
                     for reason in &assessment.reasons {
                         renderer.line(format!("  <yellow>•</yellow> {}", renderer.value(reason)));

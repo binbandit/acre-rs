@@ -111,7 +111,10 @@ pub fn command_open(
         &config,
         &repository,
         &target,
-        &MaterializeOptions { lease, no_replenish: false },
+        &MaterializeOptions {
+            lease,
+            no_replenish: false,
+        },
     )?;
 
     if !child_argv.is_empty() {
@@ -147,16 +150,25 @@ fn picker_rows(
         if let Some(branch) = &worktree.branch {
             used.insert(branch.clone());
         }
-        let here = repository.current_worktree.as_ref().is_some_and(|current| current.path == worktree.path);
+        let here = repository
+            .current_worktree
+            .as_ref()
+            .is_some_and(|current| current.path == worktree.path);
         rows.push(PickerRow {
             label: label.clone(),
             detail: Some(if here { "here · worktree" } else { "worktree" }.to_owned()),
             searchable: format!("{} {}", label, worktree.path.display()),
-            value: worktree.branch.clone().unwrap_or_else(|| worktree.path.display().to_string()),
+            value: worktree
+                .branch
+                .clone()
+                .unwrap_or_else(|| worktree.path.display().to_string()),
         });
     }
     let refs = list_refs(&repository.top_level)?;
-    for reference in refs.iter().filter(|reference| reference.kind == GitRefKind::Local && !used.contains(&reference.short_name)) {
+    for reference in refs
+        .iter()
+        .filter(|reference| reference.kind == GitRefKind::Local && !used.contains(&reference.short_name))
+    {
         rows.push(ref_row(reference, &reference.short_name, "local branch", None));
     }
     let local_names = refs
@@ -166,7 +178,9 @@ fn picker_rows(
         .collect::<std::collections::BTreeSet<_>>();
     for reference in refs
         .iter()
-        .filter(|reference| reference.kind == GitRefKind::Remote && !local_names.contains(reference.short_name.as_str()))
+        .filter(|reference| {
+            reference.kind == GitRefKind::Remote && !local_names.contains(reference.short_name.as_str())
+        })
         .take(1_000)
     {
         let remote = reference.remote.as_deref().unwrap_or("remote");

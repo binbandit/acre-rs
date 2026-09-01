@@ -30,7 +30,10 @@ pub fn command_new(
         &config,
         &repository,
         &target,
-        &MaterializeOptions { lease, no_replenish: false },
+        &MaterializeOptions {
+            lease,
+            no_replenish: false,
+        },
     )?;
     if stay {
         let renderer = Renderer::new(context);

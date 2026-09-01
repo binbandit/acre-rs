@@ -25,7 +25,11 @@ pub fn navigation_destination(
         return target_root.to_path_buf();
     }
     let candidate = target_root.join(relative);
-    if candidate.is_dir() { candidate } else { target_root.to_path_buf() }
+    if candidate.is_dir() {
+        candidate
+    } else {
+        target_root.to_path_buf()
+    }
 }
 
 pub fn navigate_to_materialized(
@@ -43,7 +47,10 @@ pub fn navigate_to_materialized(
     if !context.shell.active || context.shell.session_id.is_none() {
         renderer.line("");
         renderer.line("Move this shell:");
-        renderer.line(format!("  <blue>cd {}</blue>", renderer.value(shell_quote(&destination))));
+        renderer.line(format!(
+            "  <blue>cd {}</blue>",
+            renderer.value(shell_quote(&destination))
+        ));
         renderer.line("");
         renderer.line("Enable direct navigation with <blue>acre setup</blue>.");
         return Ok(destination);
@@ -74,9 +81,15 @@ pub fn navigate_direct(
     let session_id = context.shell.session_id.as_deref().expect("checked above");
     record_navigation(config, session_id, &context.cwd, destination, context.shell.pid)?;
     let renderer = Renderer::new(context);
-    renderer.line(format!("<green>→</green> <bold><blue>{}</blue></bold>", renderer.value(label)));
+    renderer.line(format!(
+        "<green>→</green> <bold><blue>{}</blue></bold>",
+        renderer.value(label)
+    ));
     if destination.file_name().and_then(|value| value.to_str()) != Some(label) {
-        renderer.line(format!("<dim>{}</dim>", renderer.value(display_path(destination))));
+        renderer.line(format!(
+            "<dim>{}</dim>",
+            renderer.value(display_path(destination))
+        ));
     }
     write_cd_directive(context, destination)
 }
@@ -111,7 +124,10 @@ pub fn render_materialized_summary(
 ) {
     match result.target.kind {
         crate::model::TargetKind::NewBranch => {
-            renderer.line(format!("<bold><green>Created</green></bold> <blue>{}</blue>", renderer.value(&result.target.display_name)));
+            renderer.line(format!(
+                "<bold><green>Created</green></bold> <blue>{}</blue>",
+                renderer.value(&result.target.display_name)
+            ));
             if let Some(base) = &result.target.base_ref {
                 renderer.line(format!("<dim>from {}</dim>", renderer.value(base)));
             }
@@ -119,7 +135,10 @@ pub fn render_materialized_summary(
         }
         crate::model::TargetKind::RemoteBranch => {
             if let Some(remote) = &result.target.remote_branch {
-                renderer.line(format!("<dim>Tracking</dim> <blue>{}</blue>", renderer.value(remote)));
+                renderer.line(format!(
+                    "<dim>Tracking</dim> <blue>{}</blue>",
+                    renderer.value(remote)
+                ));
             }
         }
         crate::model::TargetKind::PullRequest => {
@@ -130,10 +149,19 @@ pub fn render_materialized_summary(
         _ => {}
     }
     if navigated {
-        renderer.line(format!("<green>→</green> <bold><blue>{}</blue></bold>", renderer.value(&result.target.display_name)));
+        renderer.line(format!(
+            "<green>→</green> <bold><blue>{}</blue></bold>",
+            renderer.value(&result.target.display_name)
+        ));
     } else {
-        renderer.line(format!("<bold>{}</bold>", renderer.value(environment_label(result))));
-        renderer.line(format!("<dim>{}</dim>", renderer.value(display_path(&result.path))));
+        renderer.line(format!(
+            "<bold>{}</bold>",
+            renderer.value(environment_label(result))
+        ));
+        renderer.line(format!(
+            "<dim>{}</dim>",
+            renderer.value(display_path(&result.path))
+        ));
     }
     if navigated {
         let mut details = Vec::new();
@@ -151,7 +179,12 @@ pub fn render_materialized_summary(
     if result.target.trust == crate::model::TrustLevel::Untrusted {
         renderer.line("<yellow>Fork secrets withheld · no repository code was run</yellow>");
     }
-    if result.workspace.environment.as_ref().is_some_and(|environment| environment.state == EnvironmentState::Cold) {
+    if result
+        .workspace
+        .environment
+        .as_ref()
+        .is_some_and(|environment| environment.state == EnvironmentState::Cold)
+    {
         renderer.line("");
         renderer.line("<yellow>No compatible prepared environment exists yet.</yellow>");
         renderer.line("<dim>Run the project’s normal install or build command. Acre will retain the clean result for matching branches.</dim>");

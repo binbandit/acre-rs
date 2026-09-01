@@ -1,4 +1,3 @@
-use std::fs;
 use std::process::{Command, Stdio};
 
 use crate::error::{AcreError, Result, exit};
@@ -48,7 +47,11 @@ pub fn command_config_set(context: &CommandContext, key: &str, value: &str) -> R
     validate_acre_config(&config)?;
     save_config(&config)?;
     let renderer = Renderer::new(context);
-    renderer.line(format!("<green>Set</green> <blue>{}</blue> = {}", renderer.value(key), renderer.value(parsed.to_string())));
+    renderer.line(format!(
+        "<green>Set</green> <blue>{}</blue> = {}",
+        renderer.value(key),
+        renderer.value(parsed.to_string())
+    ));
     Ok(exit::SUCCESS)
 }
 
@@ -57,16 +60,20 @@ pub fn command_config_edit(_context: &CommandContext) -> Result<i32> {
     if !target.exists() {
         save_config(&default_config())?;
     }
-    let editor = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).map_err(|_| {
-        AcreError::new(
-            "ACRE_EDITOR_NOT_CONFIGURED",
-            "Set $VISUAL or $EDITOR before using acre config edit.",
-            exit::ENVIRONMENT,
-        )
-    })?;
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .map_err(|_| {
+            AcreError::new(
+                "ACRE_EDITOR_NOT_CONFIGURED",
+                "Set $VISUAL or $EDITOR before using acre config edit.",
+                exit::ENVIRONMENT,
+            )
+        })?;
     let mut pieces = split_command(&editor);
     let program = pieces.first().cloned().unwrap_or(editor);
-    if !pieces.is_empty() { pieces.remove(0); }
+    if !pieces.is_empty() {
+        pieces.remove(0);
+    }
     let status = Command::new(program)
         .args(pieces)
         .arg(target)
@@ -109,6 +116,8 @@ fn split_command(value: &str) -> Vec<String> {
             _ => current.push(character),
         }
     }
-    if !current.is_empty() { output.push(current); }
+    if !current.is_empty() {
+        output.push(current);
+    }
     output
 }

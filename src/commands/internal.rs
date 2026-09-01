@@ -17,7 +17,7 @@ pub fn command_resume(context: &CommandContext, token: &str) -> Result<i32> {
     command_resume_done(context, token)
 }
 
-pub fn command_replenish(context: &CommandContext, common_dir: &std::path::Path) -> Result<i32> {
+pub fn command_replenish(common_dir: &std::path::Path) -> Result<i32> {
     let result = (|| -> Result<()> {
         let config = load_config()?;
         let repository = discover_repository_from_common_dir(common_dir)?;
@@ -37,13 +37,19 @@ pub fn command_complete(context: &CommandContext, token: &str) -> Result<i32> {
         .collect::<std::collections::BTreeSet<_>>();
     if let Ok(repository) = discover_repository(&context.cwd) {
         for worktree in &repository.worktrees {
-            if let Some(branch) = &worktree.branch { values.insert(branch.clone()); }
+            if let Some(branch) = &worktree.branch {
+                values.insert(branch.clone());
+            }
         }
         if let Ok(refs) = list_refs(&repository.top_level) {
             for reference in refs {
                 values.insert(match reference.kind {
                     crate::model::GitRefKind::Local => reference.short_name,
-                    crate::model::GitRefKind::Remote => format!("{}/{}", reference.remote.unwrap_or_default(), reference.short_name),
+                    crate::model::GitRefKind::Remote => format!(
+                        "{}/{}",
+                        reference.remote.unwrap_or_default(),
+                        reference.short_name
+                    ),
                 });
             }
         }
