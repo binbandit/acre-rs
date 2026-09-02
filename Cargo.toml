@@ -25,7 +25,6 @@ uuid = { version = "1.26", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
 dirs = "6.0"
 crossterm = "0.29"
-libc = "0.2"
 wait-timeout = "0.2"
 
 [dev-dependencies]

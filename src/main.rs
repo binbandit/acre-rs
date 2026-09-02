@@ -1,3 +1,5 @@
+//! Process entrypoint: run the CLI and map its exit code.
+
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

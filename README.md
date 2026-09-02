@@ -147,20 +147,20 @@ These stay outside the daily product vocabulary.
 This repository is intentionally one Rust crate with clear internal modules rather than a micro-crate graph:
 
 ```text
-commands       thin CLI handlers
+commands       one handler per command
+workspace      resolve targets, warm pool, activation, assessment, return, leases
+environment    fingerprints, cache roots, reflink seeding, seed-file integrity
 git            the only Git process boundary
-environment    fingerprints, cache inspection, COW seeding, seed integrity
-pool           allocation, activation, leases, assessment, return, recovery
-state          atomic JSON, locks, repository index, sessions, pending operations
+state          atomic JSON, locks, repository state, sessions, pending operations
 shell          parent-shell directive protocol and generated integrations
 ui             semantic output, prompts, and the focused inline picker
 ```
 
 Read [the architecture](docs/ARCHITECTURE.md) for the dependency rules and lifecycle.
 
-## Safety status
+## Verification
 
-This source reconstruction was created in an environment without a Rust toolchain, so its archive was statically checked but could not be compiled here. Run `./scripts/check.sh` locally before trialling it. The exact validation boundary is recorded in [docs/VALIDATION.md](docs/VALIDATION.md).
+CI runs `./scripts/check.sh` on Linux, macOS, and Windows: formatting, clippy with warnings denied, unit and end-to-end tests, and a release build. Run it locally before trialling a development checkout. [docs/VALIDATION.md](docs/VALIDATION.md) describes what the tests cover.
 
 ## License
 

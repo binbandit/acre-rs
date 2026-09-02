@@ -1,4 +1,6 @@
-use crate::model::SupportedShell;
+//! Generated shell integration and completion scripts for bash, zsh, fish, and PowerShell.
+
+use crate::shell::SupportedShell;
 
 pub fn generate_shell_integration(shell: SupportedShell) -> String {
     match shell {

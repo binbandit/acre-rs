@@ -5,9 +5,9 @@ Acre is one executable crate with explicit internal boundaries. The design favou
 ```text
 CLI / commands
       ↓
-pool + target + environment
+workspace + environment
       ↓
-git + state + provider
+git + state + provider + shell
       ↓
 filesystem and child processes
 ```
@@ -16,9 +16,9 @@ filesystem and child processes
 
 1. `commands` parses user intent and renders outcomes. It does not invoke Git directly.
 2. `git` is the only module allowed to run or parse Git.
-3. `pool` owns the warm-workspace lifecycle and safety decisions.
+3. `workspace` owns the lifecycle: resolving targets, the warm pool, activation, assessment, return, and leases.
 4. `environment` owns compatibility fingerprints, cache roots, copy-on-write attempts, and seed-file integrity.
-5. `state` owns persisted JSON, locks, shell history, leases, and pending two-phase operations.
+5. `state` owns persisted JSON, locks, shell history, and pending two-phase operations.
 6. `ui` owns human, plain, and JSON rendering. Business logic does not print.
 7. External worktrees are observable but never mutated by Acre.
 8. Uncertainty retains a workspace instead of recycling it.
@@ -28,20 +28,24 @@ filesystem and child processes
 ```text
 src/
   main.rs                process entrypoint
-  cli.rs                 clap declarations and dispatch
+  cli.rs                 clap declarations, the invocation context, dispatch
   error.rs               stable error codes and exit classes
-  model.rs               domain and persisted models
-  target.rs              exact target resolution
+  model.rs               the persisted schema: state records and configuration
+  util.rs                small shared helpers
 
-  commands/              daily, machine, and administrative handlers
-  git/                   process runner, discovery, porcelain parsers, mutations
-  environment/           detection, fingerprint, inspection, clone, seed integrity
-  pool/                  broker, assessment, process evidence, recovery, maintenance
-  provider/              forge target resolution
-  shell/                 directive protocol and integration generation
-  state/                 paths, atomic JSON, config, locks, index, leases, sessions
-  ui/                    semantic rendering, prompts, focused picker
+  commands/              one handler per command, plus the post-open summary
+  workspace/             resolve, pool, activate, assess, release, lease, maintain, process
+  environment/           definitions, fingerprint, inspect, roots, clone, seed
+  git/                   runner, discovery, porcelain parsers, mutations
+  state/                 storage, paths, config, lock, repository, index, sessions, operations
+  provider/              remote URL parsing and GitHub pull requests
+  shell/                 directive protocol, generated integrations, navigation
+  ui/                    markup, output, prompts, picker, error rendering
 ```
+
+Types live next to the code that produces them; `model.rs` holds only what is written to disk. Every file opens with a one-line `//!` comment saying what it is for.
+
+To follow a command end to end, start at `cli.rs`, then the handler in `commands/`, then `workspace/activate.rs` for opening or `workspace/release.rs` for returning.
 
 ## Core lifecycle
 

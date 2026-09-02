@@ -1,26 +1,6 @@
-# Validation status
+# Validation
 
-## What was verified in the creation environment
-
-- `Cargo.toml` parses as TOML.
-- Every `mod` declaration resolves to a source file.
-- All Rust source files pass a lexical delimiter and unterminated-string/comment scan.
-- The source tree contains no `todo!`, `unimplemented!`, or placeholder implementation markers.
-- The archive contains the complete source tree, documentation, schemas, checks, and CI definitions.
-- ZIP and tar.gz archives were opened after creation and their manifests compared.
-- SHA-256 checksums were generated from the final bytes.
-
-## What was not verified in the creation environment
-
-The environment did not contain `rustc`, `cargo`, or `rustfmt`, and outbound package access was unavailable. Consequently, the source was not compiled or executed here.
-
-Do not treat the archive as compiler-verified until this succeeds on your machine:
-
-```bash
-./scripts/check.sh
-```
-
-That script runs:
+`./scripts/check.sh` is the bar for every change, and CI runs it on Linux, macOS, and Windows:
 
 ```text
 cargo fmt --all -- --check
@@ -29,5 +9,16 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
+
+## What the tests cover
+
+- Unit tests sit next to the code: ref, status, and worktree parsing; markup; fingerprint normalisation; cache-root classification against a real Git repository.
+- `tests/recovery.rs` drives the built binary through throwaway repositories: opening and returning workspaces, nested cache roots, recovery after lost state, repair accounting, and CLI flag ordering.
+
+## What is exercised by hand
+
+- Pull request resolution needs `gh` and a GitHub remote.
+- Process detection is platform specific: `lsof` on macOS, `/proc` on Linux, nothing on Windows.
+- Shell integration runs inside a real interactive shell.
 
 Start with a disposable repository or a branch whose work is already committed. Acre is deliberately conservative, but filesystem and worktree lifecycle software should not be trialled first against irreplaceable uncommitted work.

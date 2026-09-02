@@ -4,7 +4,7 @@ use std::io::{IsTerminal, Write};
 
 use serde::Serialize;
 
-use crate::model::CommandContext;
+use crate::cli::CommandContext;
 use crate::ui::markup::{escape_markup, render_markup};
 
 pub struct Renderer {

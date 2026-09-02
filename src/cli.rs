@@ -1,3 +1,5 @@
+//! The command-line surface: clap definitions, the per-invocation context, and dispatch to handlers.
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -5,8 +7,31 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::commands;
 use crate::error::{AcreError, Result};
-use crate::model::{CommandContext, GlobalOptions, ShellBridge, SupportedShell};
+use crate::shell::SupportedShell;
 use crate::ui::errors::render_failure;
+
+#[derive(Debug, Clone)]
+pub struct GlobalOptions {
+    pub directory: Option<PathBuf>,
+    pub json: bool,
+    pub no_color: bool,
+    pub plain: bool,
+    pub verbose: bool,
+}
+#[derive(Debug, Clone)]
+pub struct ShellBridge {
+    pub active: bool,
+    pub directive_file: Option<PathBuf>,
+    pub session_id: Option<String>,
+    pub pid: Option<u32>,
+}
+#[derive(Debug, Clone)]
+pub struct CommandContext {
+    pub cwd: PathBuf,
+    pub interactive: bool,
+    pub global: GlobalOptions,
+    pub shell: ShellBridge,
+}
 
 #[derive(Debug, Parser)]
 #[command(

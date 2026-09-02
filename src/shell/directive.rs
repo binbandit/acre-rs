@@ -1,8 +1,10 @@
+//! The directive file: how Acre tells the wrapping shell function to `cd` or to resume a command.
+
 use std::fs;
 use std::path::Path;
 
+use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
-use crate::model::CommandContext;
 
 pub const DIRECTIVE_VERSION: &str = "acre-directive-v1";
 

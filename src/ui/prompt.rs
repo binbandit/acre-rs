@@ -1,3 +1,5 @@
+//! Yes/no confirmation on the terminal.
+
 use std::io::{self, Write};
 
 use crate::error::{AcreError, Result, exit};

@@ -1,3 +1,5 @@
+//! A tiny tag markup (`<bold>`, `<green>`) that renders to ANSI colour or plain text.
+
 const TAGS: &[(&str, &str)] = &[
     ("bold", "\x1b[1m"),
     ("dim", "\x1b[2m"),

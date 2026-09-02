@@ -1,3 +1,5 @@
+//! The inline fuzzy picker shown by a bare `acre`.
+
 use std::io::{IsTerminal, Write};
 
 use crossterm::cursor::MoveToColumn;

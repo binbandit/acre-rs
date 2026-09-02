@@ -1,5 +1,7 @@
+//! Renders an error for humans or as JSON, with a hint for the common cases.
+
+use crate::cli::CommandContext;
 use crate::error::AcreError;
-use crate::model::CommandContext;
 use crate::ui::output::Renderer;
 
 pub fn render_failure(context: &CommandContext, error: &AcreError) -> i32 {

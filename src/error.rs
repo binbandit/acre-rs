@@ -1,3 +1,5 @@
+//! One error type with stable codes and exit classes; the UI layer decides how it looks.
+
 use std::fmt::{Display, Formatter};
 
 use serde::Serialize;
