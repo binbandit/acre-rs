@@ -1,6 +1,6 @@
 # Validation
 
-`./scripts/check.sh` is the bar for every change, and CI runs it on Linux, macOS, and Windows:
+`./scripts/check.sh` is the bar for every change. CI runs the same checks on the pinned toolchain from `rust-toolchain.toml` across Linux, macOS, and Windows, and again on current stable on Linux:
 
 ```text
 cargo fmt --all -- --check

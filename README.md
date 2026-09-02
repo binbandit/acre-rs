@@ -160,7 +160,7 @@ Read [the architecture](docs/ARCHITECTURE.md) for the dependency rules and lifec
 
 ## Verification
 
-CI runs `./scripts/check.sh` on Linux, macOS, and Windows: formatting, clippy with warnings denied, unit and end-to-end tests, and a release build. Run it locally before trialling a development checkout. [docs/VALIDATION.md](docs/VALIDATION.md) describes what the tests cover.
+CI runs the checks from `./scripts/check.sh` on the pinned Rust toolchain across Linux, macOS, and Windows, plus current stable on Linux: formatting, clippy with warnings denied, and the unit and end-to-end tests. Run it locally before trialling a development checkout. [docs/VALIDATION.md](docs/VALIDATION.md) describes what the tests cover.
 
 ## License
 
