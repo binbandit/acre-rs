@@ -40,6 +40,8 @@ For Node projects, `node_modules` is normally required. Rust’s `target` direct
 
 Built-ins can be extended or excluded in user config or `.acre.json`. Paths are data only and must remain repository-relative.
 
+A cache root applies at any depth, so a monorepo package's `packages/app/node_modules` is cloned, cleared, and excluded from the ignored-data check exactly like the top-level `node_modules`. Only Git-ignored directories qualify below the top level.
+
 ## Copy strategy
 
 Acre prefers whole-slot reuse. When a second compatible workspace needs the same environment while the first remains active, Acre attempts:
