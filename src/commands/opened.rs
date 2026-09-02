@@ -21,8 +21,8 @@ pub fn navigate_to_materialized(
     let destination = navigation_destination(context, &result.repository, &result.path);
     let renderer = Renderer::new(context);
     if context.global.json {
-        // JSON mode never writes a directive; the caller moves itself.
-        renderer.json(&materialized_payload(result, &destination, true));
+        // JSON mode never writes a directive, so the payload must not claim the shell moved.
+        renderer.json(&materialized_payload(result, &destination, false));
         return Ok(destination);
     }
     render_materialized_summary(&renderer, result, &destination, true);
