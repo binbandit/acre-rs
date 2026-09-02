@@ -51,7 +51,7 @@ pub fn seed_environment(
     }
 
     let seeded_files = seed_files_only(seed_source_root, destination_root, &plan.seed_files, trust)?;
-    let mut snapshot = inspect_environment(destination_root, plan);
+    let mut snapshot = inspect_environment(destination_root, plan)?;
     snapshot.source = Some(source_root.to_path_buf());
     snapshot.cloned_files = Some(cloned_files);
     snapshot.cloned_bytes = Some(cloned_bytes);

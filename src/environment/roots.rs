@@ -7,10 +7,19 @@ use crate::git::status::list_ignored_entries;
 
 /// Where a worktree's ignored data lives: approved cache-root directories, and the
 /// Git-ignored paths that fall outside every one of them.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct IgnoredLayout {
     pub cache_roots: Vec<String>,
     pub unknown: Vec<String>,
+}
+
+impl IgnoredLayout {
+    /// True when a directory matching `root` is present at any depth.
+    pub fn has_cache_root(&self, root: &str) -> bool {
+        self.cache_roots
+            .iter()
+            .any(|present| is_within_root(present, root))
+    }
 }
 
 /// Cache roots apply at any depth, so a monorepo package's `node_modules` counts like the
@@ -35,13 +44,13 @@ pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<Ignore
                 found.extend(nested);
                 continue;
             }
+            found.extend(
+                cache_roots
+                    .iter()
+                    .filter_map(|root| nested_cache_root(relative, root))
+                    .filter(|nested| worktree.join(nested).is_dir()),
+            );
         }
-        found.extend(
-            cache_roots
-                .iter()
-                .filter_map(|root| nested_cache_root(relative, root))
-                .filter(|nested| worktree.join(nested).is_dir()),
-        );
         unknown.push(entry);
     }
     Ok(IgnoredLayout {
@@ -74,6 +83,9 @@ fn cache_roots_filling(worktree: &Path, relative: &str, cache_roots: &[String]) 
 /// When an ignored directory is an ancestor of a multi-component cache root, such as
 /// `apps/web/.next` for `.next/cache`, complete it to the nested root path.
 fn nested_cache_root(entry: &str, root: &str) -> Option<String> {
+    if !root.contains('/') {
+        return None;
+    }
     let root_parts: Vec<&str> = root.split('/').collect();
     let entry_parts: Vec<&str> = entry.split('/').collect();
     (1..root_parts.len()).rev().find_map(|count| {
@@ -85,20 +97,21 @@ fn nested_cache_root(entry: &str, root: &str) -> Option<String> {
 
 /// True when the repository-relative `path` is `root` or lies beneath a directory matching
 /// `root` at any depth, so `packages/app/node_modules` matches the root `node_modules`.
+/// Both sides arrive without `./` prefixes or trailing slashes.
 fn is_within_root(path: &str, root: &str) -> bool {
-    let path = path.trim_start_matches("./").trim_end_matches('/');
-    let root = root.trim_start_matches("./").trim_end_matches('/');
-    !root.is_empty() && format!("/{path}/").contains(&format!("/{root}/"))
+    format!("/{path}/").contains(&format!("/{root}/"))
 }
 
 /// Sorted order puts parents first, so anything beneath a kept path is already covered.
 fn without_descendants(paths: BTreeSet<String>) -> Vec<String> {
     let mut result: Vec<String> = Vec::new();
     for candidate in paths {
-        if !result
-            .iter()
-            .any(|kept| candidate.starts_with(&format!("{kept}/")))
-        {
+        let covered = result.iter().any(|kept| {
+            candidate
+                .strip_prefix(kept.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+        });
+        if !covered {
             result.push(candidate);
         }
     }
@@ -107,9 +120,8 @@ fn without_descendants(paths: BTreeSet<String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-
     use super::*;
+    use crate::git::runner::run_git;
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -117,12 +129,7 @@ mod tests {
 
     fn repository(gitignore: &str, files: &[&str]) -> tempfile::TempDir {
         let temp = tempfile::tempdir().expect("temp dir");
-        let status = Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(temp.path())
-            .status()
-            .expect("git init");
-        assert!(status.success());
+        run_git(temp.path(), &["init", "-q"]).expect("git init");
         fs::write(temp.path().join(".gitignore"), gitignore).expect("gitignore");
         for file in files {
             let path = temp.path().join(file);
@@ -130,12 +137,7 @@ mod tests {
             fs::write(path, "x").expect("file");
         }
         // Stage everything Git does not ignore so the layout reads like a real checkout.
-        let status = Command::new("git")
-            .args(["add", "-A"])
-            .current_dir(temp.path())
-            .status()
-            .expect("git add");
-        assert!(status.success());
+        run_git(temp.path(), &["add", "-A"]).expect("git add");
         temp
     }
 
@@ -163,6 +165,9 @@ mod tests {
             ])
         );
         assert_eq!(layout.unknown, strings(&["apps/web/.next/", "stray.log"]));
+        assert!(layout.has_cache_root("node_modules"));
+        assert!(layout.has_cache_root(".next/cache"));
+        assert!(!layout.has_cache_root(".venv"));
     }
 
     #[test]
@@ -182,13 +187,11 @@ mod tests {
     #[test]
     fn root_matching_works_at_any_depth() {
         assert!(is_within_root("node_modules", "node_modules"));
-        assert!(is_within_root("node_modules/", "node_modules"));
-        assert!(is_within_root("packages/app/node_modules/", "node_modules"));
+        assert!(is_within_root("packages/app/node_modules", "node_modules"));
         assert!(is_within_root("node_modules/.cache/x", "node_modules"));
-        assert!(is_within_root("apps/web/.next/cache/", ".next/cache"));
-        assert!(!is_within_root("node_modules_backup/", "node_modules"));
-        assert!(!is_within_root("apps/web/.next/", ".next/cache"));
-        assert!(!is_within_root("anything", ""));
+        assert!(is_within_root("apps/web/.next/cache", ".next/cache"));
+        assert!(!is_within_root("node_modules_backup", "node_modules"));
+        assert!(!is_within_root("apps/web/.next", ".next/cache"));
     }
 
     #[test]

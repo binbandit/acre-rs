@@ -3,10 +3,9 @@ use crate::environment::roots::inspect_ignored;
 use crate::environment::seed::changed_seed_files;
 use crate::error::Result;
 use crate::git::status::{in_progress_operation, read_status};
+use crate::git::worktrees::find_worktree_by_path;
 use crate::model::{AcreConfig, DoneAssessment, Repository, RepositoryState, WorkspaceRecord};
 use crate::pool::process::find_processes_using_path;
-use crate::state::config::load_repo_config;
-use crate::util::canonical_or_absolute;
 
 #[derive(Debug, Clone, Default)]
 pub struct AssessOptions {
@@ -24,17 +23,13 @@ pub fn assess_workspace(
 ) -> Result<DoneAssessment> {
     let status = read_status(&workspace.path)?;
     let operation = in_progress_operation(&workspace.path)?;
-    let registered = repository
-        .worktrees
-        .iter()
-        .find(|worktree| canonical_or_absolute(&worktree.path) == canonical_or_absolute(&workspace.path));
+    let registered = find_worktree_by_path(&repository.worktrees, &workspace.path);
     let cache_roots = match &workspace.environment {
         Some(environment) => environment.cache_roots.clone(),
         // A recovered workspace carries no snapshot, so derive its approved roots from its checkout.
         None => {
             let reference = registered.map_or("HEAD", |worktree| worktree.head.as_str());
-            let repo_config = load_repo_config(&repository.top_level)?;
-            build_environment_plan(repository, reference, config, &repo_config)?.cache_roots
+            build_environment_plan(repository, reference, config)?.cache_roots
         }
     };
     let ignored = inspect_ignored(&workspace.path, &cache_roots)?.unknown;
@@ -60,15 +55,15 @@ pub fn assess_workspace(
     } else {
         Vec::new()
     };
-    let locked = registered
+    let locked = registered.is_some_and(|worktree| worktree.locked);
+    let lock_reason = registered
         .filter(|worktree| worktree.locked)
-        .map(|worktree| worktree.lock_reason.clone().unwrap_or_default());
+        .and_then(|worktree| worktree.lock_reason.clone());
     let mut reasons = Vec::new();
-    if let Some(reason) = &locked {
-        reasons.push(if reason.is_empty() {
-            "worktree is locked".to_owned()
-        } else {
-            format!("worktree is locked: {reason}")
+    if locked {
+        reasons.push(match &lock_reason {
+            Some(reason) => format!("worktree is locked: {reason}"),
+            None => "worktree is locked".to_owned(),
         });
     }
     if status.dirty {
@@ -94,6 +89,7 @@ pub fn assess_workspace(
         status,
         operation,
         locked,
+        lock_reason,
         new_ignored,
         changed_seed_files,
         leases,

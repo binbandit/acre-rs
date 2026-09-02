@@ -6,18 +6,20 @@ use serde_json::{Map, Value, json};
 use crate::environment::definitions::{ALL_FINGERPRINT_FILES, detect_ecosystems};
 use crate::error::Result;
 use crate::git::content::read_files_at_ref;
-use crate::model::{AcreConfig, EnvironmentPlan, RepoConfig, Repository};
+use crate::model::{AcreConfig, EnvironmentPlan, Repository};
+use crate::state::config::load_repo_config;
 use crate::util::{sha256, unique_paths};
 
 pub fn build_environment_plan(
     repository: &Repository,
     reference: &str,
     config: &AcreConfig,
-    repo_config: &RepoConfig,
 ) -> Result<EnvironmentPlan> {
     let files = read_files_at_ref(&repository.top_level, reference, ALL_FINGERPRINT_FILES)?;
     let ecosystems = detect_ecosystems(&files);
-    let overrides = repo_config.environment.clone().unwrap_or_default();
+    let overrides = load_repo_config(&repository.top_level)?
+        .environment
+        .unwrap_or_default();
     let excluded: BTreeSet<String> = config
         .environment
         .excluded_roots

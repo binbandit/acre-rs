@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{AcreError, Result, exit};
 use crate::git::repository::{discover_repository, discover_repository_from_common_dir};
 use crate::git::status::read_status;
+use crate::git::worktrees::find_worktree_by_path;
 use crate::model::{CommandContext, PendingDoneOperation, Repository, WorkspaceOwnership, WorkspaceRecord};
 use crate::pool::assessment::AssessOptions;
 use crate::pool::broker::{
@@ -61,12 +62,7 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
         .iter()
         .find(|workspace| canonical_or_absolute(&workspace.path) == canonical_or_absolute(&target_path))
         .cloned();
-    if repository
-        .worktrees
-        .iter()
-        .find(|worktree| canonical_or_absolute(&worktree.path) == canonical_or_absolute(&target_path))
-        .is_some_and(|worktree| worktree.is_main)
-    {
+    if find_worktree_by_path(&repository.worktrees, &target_path).is_some_and(|worktree| worktree.is_main) {
         return Err(AcreError::new(
             "ACRE_PRIMARY_WORKTREE",
             "The repository primary worktree is permanent; Acre only returns workspaces that it created.",
@@ -163,17 +159,13 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
         .with_details(serde_json::json!({ "hint": "acre setup", "workspace": workspace.path })));
     }
     let destination = safe_destination(context, &config, &repository, &workspace.path)?;
-    let registered = repository
-        .worktrees
-        .iter()
-        .find(|worktree| canonical_or_absolute(&worktree.path) == canonical_or_absolute(&workspace.path))
-        .ok_or_else(|| {
-            AcreError::new(
-                "ACRE_WORKTREE_MISSING",
-                "Git no longer knows about this Acre workspace.",
-                exit::CONFLICT,
-            )
-        })?;
+    let registered = find_worktree_by_path(&repository.worktrees, &workspace.path).ok_or_else(|| {
+        AcreError::new(
+            "ACRE_WORKTREE_MISSING",
+            "Git no longer knows about this Acre workspace.",
+            exit::CONFLICT,
+        )
+    })?;
     let token = random_id();
     save_pending_done(
         &config,
@@ -217,10 +209,7 @@ pub fn command_resume_done(context: &CommandContext, token: &str) -> Result<i32>
                 exit::CONFLICT,
             )
         })?;
-    let registered = repository
-        .worktrees
-        .iter()
-        .find(|worktree| canonical_or_absolute(&worktree.path) == canonical_or_absolute(&workspace.path));
+    let registered = find_worktree_by_path(&repository.worktrees, &workspace.path);
     let status = read_status(&workspace.path)?;
     if registered.is_none_or(|worktree| worktree.head != operation.expected_head)
         || status.fingerprint != operation.expected_status_fingerprint
@@ -328,11 +317,10 @@ fn render_unsafe(context: &CommandContext, assessment: &crate::model::DoneAssess
     if let Some(operation) = &assessment.operation {
         renderer.line(format!("  {} in progress", renderer.value(operation)));
     }
-    if let Some(reason) = &assessment.locked {
-        renderer.line(if reason.is_empty() {
-            "  worktree locked".to_owned()
-        } else {
-            format!("  worktree locked: {}", renderer.value(reason))
+    if assessment.locked {
+        renderer.line(match &assessment.lock_reason {
+            Some(reason) => format!("  worktree locked: {}", renderer.value(reason)),
+            None => "  worktree locked".to_owned(),
         });
     }
     render_entries(&renderer, "ignored", &assessment.new_ignored);

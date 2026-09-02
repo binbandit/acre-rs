@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use acre::git::runner::run_git;
 use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -85,26 +86,20 @@ impl Fixture {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .status()
-        .expect("run git");
-    assert!(status.success(), "git {args:?} failed");
+    run_git(cwd, args).unwrap_or_else(|error| panic!("git {args:?} failed: {error}"));
 }
 
 fn branch_exists(repo: &Path, branch: &str) -> bool {
-    Command::new("git")
-        .args([
+    run_git(
+        repo,
+        &[
             "rev-parse",
             "--verify",
             "--quiet",
             &format!("refs/heads/{branch}"),
-        ])
-        .current_dir(repo)
-        .status()
-        .expect("run git")
-        .success()
+        ],
+    )
+    .is_ok()
 }
 
 #[test]

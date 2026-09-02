@@ -14,13 +14,13 @@ use crate::git::operations::{
     remove_worktree, reset_workspace, restore_stored_target,
 };
 use crate::git::repository::discover_repository;
+use crate::git::worktrees::find_worktree_by_path;
 use crate::model::{
     AcreConfig, DoneAssessment, EnvironmentPlan, EnvironmentSnapshot, EnvironmentState,
     MaterializedWorkspace, Repository, RepositoryState, ResolvedTarget, StoredTarget, TrustLevel,
     WorkspaceLease, WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
 };
 use crate::pool::assessment::{AssessOptions, assess_workspace};
-use crate::state::config::load_repo_config;
 use crate::state::index::remember_repository;
 use crate::state::leases::{AcquireLease, acquire_lease, release_lease, release_session_lease};
 use crate::state::lock::RepositoryLock;
@@ -70,7 +70,6 @@ pub fn materialize_workspace(
     let started = Instant::now();
     let lock = RepositoryLock::acquire(&repository_lock_path(config, repository_input))?;
     let repository = discover_repository(&repository_input.top_level)?;
-    let repo_config = load_repo_config(&repository.top_level)?;
     let mut state = load_repository_state(config, &repository)?;
     let mut replenish = false;
 
@@ -127,7 +126,7 @@ pub fn materialize_workspace(
             }
         }
 
-        let plan = build_environment_plan(&repository, &target.oid, config, &repo_config)?;
+        let plan = build_environment_plan(&repository, &target.oid, config)?;
         let (next_state, mut slot) = select_slot(config, &repository, state.clone(), &plan, &target.oid)?;
         state = next_state;
         let matching_environment = slot
@@ -166,7 +165,7 @@ pub fn materialize_workspace(
 
             let environment: EnvironmentSnapshot;
             if matching_environment {
-                let mut inspected = inspect_environment(&active_path, &plan);
+                let mut inspected = inspect_environment(&active_path, &plan)?;
                 inspected.source = Some(idle_path.clone());
                 inspected.clone_mode = Some(crate::model::CloneMode::Reuse);
                 environment = inspected;
@@ -181,13 +180,13 @@ pub fn materialize_workspace(
                         seeded_paths = seeded.seeded_files;
                     }
                     Err(_) => {
-                        environment = inspect_environment(&active_path, &plan);
+                        environment = inspect_environment(&active_path, &plan)?;
                     }
                 }
             } else {
                 seeded_paths =
                     seed_files_only(trusted_seed_source, &active_path, &plan.seed_files, target.trust)?;
-                environment = inspect_environment(&active_path, &plan);
+                environment = inspect_environment(&active_path, &plan)?;
             }
 
             let baseline_ignored = inspect_ignored(&active_path, &environment.cache_roots)?.unknown;
@@ -283,7 +282,6 @@ pub fn warm_repository(
 ) -> Result<Vec<WorkspaceSlot>> {
     let _lock = RepositoryLock::acquire(&repository_lock_path(config, repository_input))?;
     let repository = discover_repository(&repository_input.top_level)?;
-    let repo_config = load_repo_config(&repository.top_level)?;
     let mut state = load_repository_state(config, &repository)?;
     let base_ref = match (&repository.remote, &repository.default_branch) {
         (Some(remote), Some(branch)) => format!("{remote}/{branch}"),
@@ -298,7 +296,7 @@ pub fn warm_repository(
                 .map(|worktree| worktree.head.clone())
         })
         .unwrap_or_else(|| "HEAD".to_owned());
-    let plan = build_environment_plan(&repository, &oid, config, &repo_config)?;
+    let plan = build_environment_plan(&repository, &oid, config)?;
     let requested = requested_slots
         .unwrap_or(config.pool.min_slots)
         .min(config.pool.max_slots);
@@ -350,7 +348,6 @@ pub fn return_workspace(
 ) -> Result<ReturnResult> {
     let _lock = RepositoryLock::acquire(&repository_lock_path(config, repository_input))?;
     let repository = discover_repository(&repository_input.top_level)?;
-    let repo_config = load_repo_config(&repository.top_level)?;
     let mut state = load_repository_state(config, &repository)?;
     let workspace = state
         .workspaces
@@ -399,20 +396,16 @@ pub fn return_workspace(
         });
     }
 
-    let registered = repository
-        .worktrees
-        .iter()
-        .find(|worktree| canonical_or_absolute(&worktree.path) == canonical_or_absolute(&workspace.path))
-        .ok_or_else(|| {
-            AcreError::new(
-                "ACRE_WORKTREE_MISSING",
-                "Git no longer knows about this Acre workspace.",
-                exit::CONFLICT,
-            )
-            .with_details(serde_json::json!({ "path": workspace.path }))
-        })?;
-    let plan = build_environment_plan(&repository, &registered.head, config, &repo_config)?;
-    let environment = inspect_environment(&workspace.path, &plan);
+    let registered = find_worktree_by_path(&repository.worktrees, &workspace.path).ok_or_else(|| {
+        AcreError::new(
+            "ACRE_WORKTREE_MISSING",
+            "Git no longer knows about this Acre workspace.",
+            exit::CONFLICT,
+        )
+        .with_details(serde_json::json!({ "path": workspace.path }))
+    })?;
+    let plan = build_environment_plan(&repository, &registered.head, config)?;
+    let environment = inspect_environment(&workspace.path, &plan)?;
 
     let idle_slots = state
         .slots
@@ -598,10 +591,8 @@ fn select_slot(
         .iter()
         .filter(|slot| {
             slot.status == WorkspaceStatus::Idle
-                && repository.worktrees.iter().any(|worktree| {
-                    canonical_or_absolute(&worktree.path) == canonical_or_absolute(&slot.path)
-                        && worktree.exists
-                })
+                && find_worktree_by_path(&repository.worktrees, &slot.path)
+                    .is_some_and(|worktree| worktree.exists)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -640,7 +631,7 @@ fn create_slot(
     let id = random_short(12);
     let slot_path = slots_root(config, repository).join(&id);
     create_detached_worktree(repository, &slot_path, oid)?;
-    let mut environment = inspect_environment(&slot_path, plan);
+    let mut environment = inspect_environment(&slot_path, plan)?;
     if let Some(source) = find_environment_source(config, repository, &state, plan, &slot_path)? {
         if let Ok(seeded) = seed_environment(
             &source,
@@ -708,17 +699,16 @@ fn find_environment_source(
     if primary == excluded_path || !primary.exists() {
         return Ok(None);
     }
-    let repo_config = load_repo_config(&repository.top_level)?;
     let primary_oid = repository
         .worktrees
         .first()
         .map(|worktree| worktree.head.as_str())
         .unwrap_or("HEAD");
-    let primary_plan = build_environment_plan(repository, primary_oid, config, &repo_config)?;
+    let primary_plan = build_environment_plan(repository, primary_oid, config)?;
     if primary_plan.fingerprint != plan.fingerprint {
         return Ok(None);
     }
-    let snapshot = inspect_environment(&primary, &primary_plan);
+    let snapshot = inspect_environment(&primary, &primary_plan)?;
     Ok((!snapshot.present_roots.is_empty()).then_some(primary))
 }
 
