@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use crate::error::{AcreError, Result, exit};
 use crate::ui::output::Renderer;
 
-pub fn confirm(renderer: &Renderer<'_>, question: &str, default_yes: bool) -> Result<bool> {
+pub fn confirm(renderer: &Renderer, question: &str, default_yes: bool) -> Result<bool> {
     let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
     print!("{} ", renderer.format(&format!("{question} {suffix}"), true));
     io::stdout()

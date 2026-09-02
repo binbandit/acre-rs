@@ -117,7 +117,7 @@ pub fn materialized_payload(
 }
 
 pub fn render_materialized_summary(
-    renderer: &Renderer<'_>,
+    renderer: &Renderer,
     result: &MaterializedWorkspace,
     destination: &Path,
     navigated: bool,

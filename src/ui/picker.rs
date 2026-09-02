@@ -24,11 +24,7 @@ pub enum PickerResult<T> {
     Interrupted,
 }
 
-pub fn pick<T: Clone>(
-    renderer: &Renderer<'_>,
-    title: &str,
-    rows: &[PickerRow<T>],
-) -> Result<PickerResult<T>> {
+pub fn pick<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]) -> Result<PickerResult<T>> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Ok(PickerResult::Cancelled);
     }
@@ -41,11 +37,7 @@ pub fn pick<T: Clone>(
     result
 }
 
-fn picker_loop<T: Clone>(
-    renderer: &Renderer<'_>,
-    title: &str,
-    rows: &[PickerRow<T>],
-) -> Result<PickerResult<T>> {
+fn picker_loop<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]) -> Result<PickerResult<T>> {
     let mut filter = String::new();
     let mut selected = 0usize;
     let mut lines_drawn = 0usize;
@@ -100,7 +92,7 @@ fn picker_loop<T: Clone>(
 }
 
 fn draw<T>(
-    renderer: &Renderer<'_>,
+    renderer: &Renderer,
     title: &str,
     rows: &[PickerRow<T>],
     filter: &str,

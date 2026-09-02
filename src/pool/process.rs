@@ -73,9 +73,9 @@ fn find_macos_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> 
     // assessed, so run it from the filesystem root to keep it out of its own report.
     let result = run_process(
         "lsof",
-        &["-a".into(), "-d".into(), "cwd".into(), "-F".into(), "pcn".into()],
+        &["-a", "-d", "cwd", "-F", "pcn"],
         RunOptions {
-            cwd: Some(Path::new("/")),
+            cwd: Some(PathBuf::from("/")),
             timeout: Some(std::time::Duration::from_secs(10)),
             accepted_statuses: &[0, 1],
             ..RunOptions::default()

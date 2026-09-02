@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 
 use crate::commands;
 use crate::error::{AcreError, Result};
@@ -102,7 +102,7 @@ struct DoneArgs {
 #[derive(Debug, Args)]
 struct SetupArgs {
     #[arg(long, value_enum)]
-    shell: Option<CliShell>,
+    shell: Option<SupportedShell>,
     #[arg(short = 'y', long)]
     yes: bool,
 }
@@ -181,31 +181,13 @@ struct ShellArgs {
 
 #[derive(Debug, Subcommand)]
 enum ShellCommand {
-    Init { shell: CliShell },
+    Init { shell: SupportedShell },
 }
 
 #[derive(Debug, Args)]
 struct CompletionArgs {
-    shell: CliShell,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum CliShell {
-    Bash,
-    Zsh,
-    Fish,
-    Powershell,
-}
-
-impl From<CliShell> for SupportedShell {
-    fn from(shell: CliShell) -> Self {
-        match shell {
-            CliShell::Bash => Self::Bash,
-            CliShell::Zsh => Self::Zsh,
-            CliShell::Fish => Self::Fish,
-            CliShell::Powershell => Self::Powershell,
-        }
-    }
+    #[arg(value_enum)]
+    shell: SupportedShell,
 }
 
 pub fn run() -> i32 {
@@ -244,9 +226,7 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
             commands::new::command_new(context, &args.branch, args.from.as_deref(), args.fresh, args.stay)
         }
         Some(Command::Done(args)) => commands::done::command_done(context, args.target.as_deref()),
-        Some(Command::Setup(args)) => {
-            commands::setup::command_setup(context, args.shell.map(Into::into), args.yes)
-        }
+        Some(Command::Setup(args)) => commands::setup::command_setup(context, args.shell, args.yes),
         Some(Command::Acquire(args)) => commands::machine::command_acquire(
             context,
             &args.target,
@@ -275,9 +255,9 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
             ConfigCommand::RepoInit { force } => commands::config::command_repo_config_init(context, force),
         },
         Some(Command::Shell(args)) => match args.command {
-            ShellCommand::Init { shell } => commands::shell::command_shell_init(context, shell.into()),
+            ShellCommand::Init { shell } => commands::shell::command_shell_init(context, shell),
         },
-        Some(Command::Completion(args)) => commands::shell::command_completion(context, args.shell.into()),
+        Some(Command::Completion(args)) => commands::shell::command_completion(context, args.shell),
         Some(Command::SessionId) => commands::internal::command_session_id(context),
         Some(Command::Resume { token }) => commands::internal::command_resume(context, &token),
         Some(Command::Replenish { common_dir }) => commands::internal::command_replenish(&common_dir),

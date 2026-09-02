@@ -114,7 +114,7 @@ struct DoctorCheck {
 pub fn command_system_doctor(context: &CommandContext) -> Result<i32> {
     let renderer = Renderer::new(context);
     let mut checks = Vec::new();
-    match run_process("git", &["--version".into()], RunOptions::default()) {
+    match run_process("git", &["--version"], RunOptions::default()) {
         Ok(result) => checks.push(DoctorCheck {
             name: "Git".into(),
             ok: true,

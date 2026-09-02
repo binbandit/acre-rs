@@ -108,12 +108,7 @@ pub fn clear_seed_files(root: &Path, files: &[String]) -> Result<()> {
 fn is_ignored_seed(source_root: &Path, relative: &str) -> Result<bool> {
     let result = run_git_with(
         source_root,
-        vec![
-            "check-ignore".into(),
-            "--quiet".into(),
-            "--".into(),
-            relative.into(),
-        ],
+        &["check-ignore", "--quiet", "--", relative],
         RunOptions {
             timeout: Some(Duration::from_secs(10)),
             accepted_statuses: &[0, 1, 128],
@@ -153,24 +148,14 @@ pub fn clone_tree(source: &Path, destination: &Path) -> Result<CloneReport> {
 }
 
 fn clone_with_platform_tool(source: &Path, destination: &Path) -> Option<CloneReport> {
-    let (program, args) = if cfg!(target_os = "macos") {
-        (
-            "/bin/cp",
-            vec![
-                "-cR".to_owned(),
-                source.display().to_string(),
-                destination.display().to_string(),
-            ],
-        )
+    let source_text = source.display().to_string();
+    let destination_text = destination.display().to_string();
+    let (program, args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
+        ("/bin/cp", vec!["-cR", &source_text, &destination_text])
     } else if cfg!(target_os = "linux") {
         (
             "cp",
-            vec![
-                "-a".to_owned(),
-                "--reflink=always".to_owned(),
-                source.display().to_string(),
-                destination.display().to_string(),
-            ],
+            vec!["-a", "--reflink=always", &source_text, &destination_text],
         )
     } else {
         return None;

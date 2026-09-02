@@ -152,8 +152,9 @@ fn merge_json(target: &mut Value, source: Value) {
     }
 }
 
-fn validate_environment_paths<'a>(values: impl Iterator<Item = &'a String>, source: &str) -> Result<()> {
+fn validate_environment_paths(values: impl IntoIterator<Item = impl AsRef<str>>, source: &str) -> Result<()> {
     for value in values {
+        let value = value.as_ref();
         if !validate_relative_path(value) {
             return invalid(format!("{source} contains an unsafe repository path: {value}"));
         }

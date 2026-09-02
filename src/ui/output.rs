@@ -1,3 +1,5 @@
+//! Writes human and JSON output, honoring colour preferences per stream.
+
 use std::io::{IsTerminal, Write};
 
 use serde::Serialize;
@@ -5,13 +7,15 @@ use serde::Serialize;
 use crate::model::CommandContext;
 use crate::ui::markup::{escape_markup, render_markup};
 
-pub struct Renderer<'a> {
-    context: &'a CommandContext,
+pub struct Renderer {
+    color: bool,
 }
 
-impl<'a> Renderer<'a> {
-    pub fn new(context: &'a CommandContext) -> Self {
-        Self { context }
+impl Renderer {
+    pub fn new(context: &CommandContext) -> Self {
+        let color =
+            !context.global.no_color && !context.global.plain && std::env::var_os("NO_COLOR").is_none();
+        Self { color }
     }
 
     pub fn line(&self, markup: impl AsRef<str>) {
@@ -44,15 +48,12 @@ impl<'a> Renderer<'a> {
         let _ = stdout.flush();
     }
 
+    /// Escapes user-provided text so it cannot inject markup or control characters.
     pub fn value(&self, value: impl AsRef<str>) -> String {
         escape_markup(value.as_ref())
     }
 
     pub fn format(&self, markup: &str, tty: bool) -> String {
-        let color = !self.context.global.no_color
-            && !self.context.global.plain
-            && tty
-            && std::env::var_os("NO_COLOR").is_none();
-        render_markup(markup, color)
+        render_markup(markup, self.color && tty)
     }
 }

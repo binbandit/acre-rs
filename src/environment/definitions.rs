@@ -148,43 +148,43 @@ pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefi
         .unwrap_or_default();
 
     if files.contains_key("pnpm-lock.yaml") || package_json.contains("\"packageManager\": \"pnpm") {
-        result.push(PNPM.clone());
+        result.push(PNPM);
     } else if files.contains_key("yarn.lock") || package_json.contains("\"packageManager\": \"yarn") {
-        result.push(YARN.clone());
+        result.push(YARN);
     } else if files.contains_key("bun.lock")
         || files.contains_key("bun.lockb")
         || package_json.contains("\"packageManager\": \"bun")
     {
-        result.push(BUN.clone());
+        result.push(BUN);
     } else if files.contains_key("package-lock.json")
         || files.contains_key("npm-shrinkwrap.json")
         || files.contains_key("package.json")
     {
-        result.push(NPM.clone());
+        result.push(NPM);
     }
 
     if files.contains_key("turbo.json") || package_json.contains("\"turbo\"") {
-        result.push(TURBO.clone());
+        result.push(TURBO);
     }
     if ["next.config.js", "next.config.mjs", "next.config.ts"]
         .iter()
         .any(|file| files.contains_key(*file))
         || package_json.contains("\"next\"")
     {
-        result.push(NEXT.clone());
+        result.push(NEXT);
     }
     if files.contains_key("Cargo.toml") || files.contains_key("Cargo.lock") {
-        result.push(RUST.clone());
+        result.push(RUST);
     }
     if files.contains_key("pyproject.toml")
         || files.contains_key("uv.lock")
         || files.contains_key("poetry.lock")
         || files.contains_key("requirements.txt")
     {
-        result.push(PYTHON.clone());
+        result.push(PYTHON);
     }
     if files.contains_key("go.mod") {
-        result.push(GO.clone());
+        result.push(GO);
     }
     result
 }
