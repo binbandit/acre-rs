@@ -11,7 +11,7 @@ use crate::pool::broker::{
 };
 use crate::shell::navigation::{navigate_direct, navigate_to_materialized};
 use crate::state::config::load_config;
-use crate::state::repository::load_repository_state;
+use crate::state::repository::{find_workspace_by_path, load_repository_state};
 use crate::state::shell::read_shell_state;
 use crate::target::resolve_existing_target;
 use crate::ui::output::Renderer;
@@ -51,17 +51,11 @@ pub fn command_open(
         if let Ok(current_repository) = discover_repository(&context.cwd) {
             let _ = release_shell_session_lease(&config, &current_repository, session_id);
         }
-        if let Ok(previous_repository) = discover_repository(&previous) {
-            let _ = lease_workspace_by_path(
-                &config,
-                &previous_repository,
-                &previous,
-                &LeaseRequest {
-                    holder: format!("shell:{session_id}"),
-                    pid: context.shell.pid,
-                    session_id: Some(session_id.to_owned()),
-                },
-            );
+        if let (Ok(previous_repository), Some(request)) = (
+            discover_repository(&previous),
+            LeaseRequest::for_shell(&context.shell),
+        ) {
+            let _ = lease_workspace_by_path(&config, &previous_repository, &previous, &request);
         }
         let label = previous
             .file_name()
@@ -92,20 +86,14 @@ pub fn command_open(
         }
     };
     let target = resolve_existing_target(&repository, &state, &selector)?;
-    let lease = if child_argv.is_empty() && context.shell.active {
-        context.shell.session_id.as_ref().map(|session_id| LeaseRequest {
-            holder: format!("shell:{session_id}"),
-            pid: context.shell.pid,
-            session_id: Some(session_id.clone()),
-        })
-    } else if !child_argv.is_empty() {
+    let lease = if child_argv.is_empty() {
+        LeaseRequest::for_shell(&context.shell)
+    } else {
         Some(LeaseRequest {
             holder: format!("command:{}", std::process::id()),
             pid: Some(std::process::id()),
             session_id: None,
         })
-    } else {
-        None
     };
     let materialized = materialize_workspace(
         &config,
@@ -140,10 +128,7 @@ fn picker_rows(
             .branch
             .clone()
             .or_else(|| {
-                state
-                    .workspaces
-                    .iter()
-                    .find(|workspace| workspace.path == worktree.path)
+                find_workspace_by_path(state, &worktree.path)
                     .map(|workspace| workspace.target.display_name.clone())
             })
             .unwrap_or_else(|| format!("detached {}", &worktree.head[..worktree.head.len().min(8)]));

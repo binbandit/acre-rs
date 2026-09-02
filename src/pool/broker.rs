@@ -17,8 +17,8 @@ use crate::git::repository::discover_repository;
 use crate::git::worktrees::find_worktree_by_path;
 use crate::model::{
     AcreConfig, DoneAssessment, EnvironmentPlan, EnvironmentSnapshot, EnvironmentState,
-    MaterializedWorkspace, Repository, RepositoryState, ResolvedTarget, StoredTarget, TrustLevel,
-    WorkspaceLease, WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
+    MaterializedWorkspace, Repository, RepositoryState, ResolvedTarget, ShellBridge, StoredTarget,
+    TrustLevel, WorkspaceLease, WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
 };
 use crate::pool::assessment::{AssessOptions, assess_workspace};
 use crate::state::index::remember_repository;
@@ -28,7 +28,6 @@ use crate::state::paths::{active_root, repository_lock_path, slots_root};
 use crate::state::repository::{
     find_workspace_by_path, find_workspace_for_target, load_repository_state, save_repository_state,
 };
-use crate::target::store_target;
 use crate::util::{
     branch_slug, canonical_or_absolute, ensure_directory, now_iso, random_short, remove_path, short_hash,
 };
@@ -38,6 +37,18 @@ pub struct LeaseRequest {
     pub holder: String,
     pub pid: Option<u32>,
     pub session_id: Option<String>,
+}
+
+impl LeaseRequest {
+    /// The lease held by the invoking shell session, when shell integration is active.
+    pub fn for_shell(shell: &ShellBridge) -> Option<Self> {
+        let session_id = shell.session_id.clone().filter(|_| shell.active)?;
+        Some(Self {
+            holder: format!("shell:{session_id}"),
+            pid: shell.pid,
+            session_id: Some(session_id),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -58,7 +69,6 @@ pub struct ReturnResult {
     pub returned: bool,
     pub pooled: bool,
     pub external: bool,
-    pub path: Option<PathBuf>,
 }
 
 pub fn materialize_workspace(
@@ -97,7 +107,7 @@ pub fn materialize_workspace(
             });
         }
 
-        let stored_target = store_target(target);
+        let stored_target = StoredTarget::from(target);
         if let Some(active) = find_workspace_for_target(&state, &stored_target).cloned() {
             if active.path.exists() {
                 if target.kind == crate::model::TargetKind::NewBranch {
@@ -217,9 +227,9 @@ pub fn materialize_workspace(
                     *candidate = slot.clone();
                 }
             }
+            let active_key = canonical_or_absolute(&active_path);
             state.workspaces.retain(|candidate| {
-                candidate.id != workspace.id
-                    && canonical_or_absolute(&candidate.path) != canonical_or_absolute(&active_path)
+                candidate.id != workspace.id && canonical_or_absolute(&candidate.path) != active_key
             });
             state.workspaces.push(workspace.clone());
             let lease = attach_lease(&mut state, &workspace, options.lease.as_ref());
@@ -380,7 +390,6 @@ pub fn return_workspace(
             returned: false,
             pooled: false,
             external: true,
-            path: Some(workspace.path),
         });
     }
 
@@ -392,7 +401,6 @@ pub fn return_workspace(
             returned: false,
             pooled: false,
             external: false,
-            path: Some(workspace.path),
         });
     }
 
@@ -497,7 +505,6 @@ pub fn return_workspace(
         returned: true,
         pooled: keep,
         external: false,
-        path: final_path,
     })
 }
 

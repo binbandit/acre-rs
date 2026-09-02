@@ -7,6 +7,7 @@ use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 
 use crate::error::{AcreError, Result, exit};
 use crate::ui::output::Renderer;
+use crate::util::is_subsequence;
 
 #[derive(Debug, Clone)]
 pub struct PickerRow<T> {
@@ -168,23 +169,9 @@ fn visible_rows<'a, T>(rows: &'a [PickerRow<T>], filter: &str) -> Vec<&'a Picker
         return rows.iter().collect();
     }
     rows.iter()
-        .filter(|row| subsequence(&needle, &row.searchable.to_ascii_lowercase()))
+        .filter(|row| {
+            let haystack = row.searchable.to_ascii_lowercase();
+            haystack.contains(&needle) || is_subsequence(&needle, &haystack)
+        })
         .collect()
-}
-
-fn subsequence(needle: &str, haystack: &str) -> bool {
-    if haystack.contains(needle) {
-        return true;
-    }
-    let mut chars = needle.chars();
-    let mut current = chars.next();
-    for character in haystack.chars() {
-        if current == Some(character) {
-            current = chars.next();
-            if current.is_none() {
-                return true;
-            }
-        }
-    }
-    needle.is_empty()
 }

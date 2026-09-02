@@ -17,14 +17,10 @@ pub fn command_new(
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let target = resolve_new_target(&repository, branch, from, fresh)?;
-    let lease = if !stay && context.shell.active {
-        context.shell.session_id.as_ref().map(|session_id| LeaseRequest {
-            holder: format!("shell:{session_id}"),
-            pid: context.shell.pid,
-            session_id: Some(session_id.clone()),
-        })
-    } else {
+    let lease = if stay {
         None
+    } else {
+        LeaseRequest::for_shell(&context.shell)
     };
     let result = materialize_workspace(
         &config,

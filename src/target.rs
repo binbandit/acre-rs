@@ -11,7 +11,8 @@ use crate::model::{
 use crate::provider::github::{
     ensure_pull_request_object, parse_pull_request_selector, resolve_pull_request,
 };
-use crate::util::canonical_or_absolute;
+use crate::state::repository::find_workspace_by_path;
+use crate::util::{canonical_or_absolute, is_subsequence};
 
 pub fn resolve_existing_target(
     repository: &Repository,
@@ -70,9 +71,7 @@ pub fn resolve_existing_target(
                     && canonical_or_absolute(&worktree.path) == canonical_or_absolute(path_value))
         }
     }) {
-        let stored = state.workspaces.iter().find(|workspace| {
-            canonical_or_absolute(&workspace.path) == canonical_or_absolute(&worktree.path)
-        });
+        let stored = find_workspace_by_path(state, &worktree.path);
         return Ok(ResolvedTarget {
             kind: TargetKind::Worktree,
             display_name: worktree
@@ -274,10 +273,6 @@ pub fn resolve_new_target(
     })
 }
 
-pub fn store_target(target: &ResolvedTarget) -> StoredTarget {
-    StoredTarget::from(target)
-}
-
 fn from_stored(target: &StoredTarget, trust: TrustLevel) -> ResolvedTarget {
     ResolvedTarget {
         kind: target.kind,
@@ -354,17 +349,10 @@ fn closest(needle: &str, candidates: &[String]) -> Vec<String> {
 
 fn similarity(needle: &str, candidate: &str) -> i32 {
     if candidate.contains(needle) {
-        return 100 - candidate.len() as i32;
+        100 - candidate.len() as i32
+    } else if is_subsequence(needle, candidate) {
+        50 - candidate.len() as i32
+    } else {
+        0
     }
-    let mut needle_chars = needle.chars();
-    let mut current = needle_chars.next();
-    for character in candidate.chars() {
-        if current == Some(character) {
-            current = needle_chars.next();
-            if current.is_none() {
-                return 50 - candidate.len() as i32;
-            }
-        }
-    }
-    0
 }
