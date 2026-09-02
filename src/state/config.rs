@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::Path;
 
 use serde_json::Value;
@@ -136,14 +135,6 @@ pub fn set_config_value(config: &mut AcreConfig, key: &str, raw: &str) -> Result
     }
     validate_acre_config(config)?;
     Ok(value)
-}
-
-pub fn read_config_text() -> Result<Option<String>> {
-    match fs::read_to_string(config_path()) {
-        Ok(value) => Ok(Some(value)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(AcreError::io("could not read Acre configuration", error)),
-    }
 }
 
 fn merge_json(target: &mut Value, source: Value) {

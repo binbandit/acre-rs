@@ -4,8 +4,7 @@ use crate::error::{AcreError, Result, exit};
 use crate::git::repository::discover_repository;
 use crate::model::CommandContext;
 use crate::state::config::{
-    default_config, load_config, save_config, set_config_value, validate_acre_config,
-    write_default_repo_config,
+    default_config, load_config, save_config, set_config_value, write_default_repo_config,
 };
 use crate::state::paths::config_path;
 use crate::ui::output::Renderer;
@@ -44,7 +43,6 @@ pub fn command_config_init(context: &CommandContext, force: bool) -> Result<i32>
 pub fn command_config_set(context: &CommandContext, key: &str, value: &str) -> Result<i32> {
     let mut config = load_config()?;
     let parsed = set_config_value(&mut config, key, value)?;
-    validate_acre_config(&config)?;
     save_config(&config)?;
     let renderer = Renderer::new(context);
     renderer.line(format!(
