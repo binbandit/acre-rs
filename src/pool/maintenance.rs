@@ -7,7 +7,7 @@ use crate::git::status::read_status;
 use crate::model::{AcreConfig, Repository, RepositoryState, WorkspaceSlot, WorkspaceStatus};
 use crate::state::lock::RepositoryLock;
 use crate::state::paths::repository_lock_path;
-use crate::state::repository::{load_repository_state, save_repository_state};
+use crate::state::repository::{load_repository_state, save_repository_state, stored_repository_state};
 use crate::util::{age_millis, canonical_or_absolute};
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -39,25 +39,41 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
     let _ = prune_worktrees(repository_input);
     let _ = repair_worktrees(repository_input);
     let repository = discover_repository(&repository_input.top_level)?;
-    let before = crate::state::repository::empty_state(&repository);
-    let raw_count = before.slots.len() + before.workspaces.len();
+    // Loading recovers unregistered Acre worktrees, so anything absent from the persisted
+    // state afterwards was recovered by this repair.
+    let stored = stored_repository_state(config, &repository);
+    let known_slots: BTreeSet<&str> = stored
+        .iter()
+        .flat_map(|state| state.slots.iter().map(|slot| slot.id.as_str()))
+        .collect();
+    let known_workspaces: BTreeSet<&str> = stored
+        .iter()
+        .flat_map(|state| state.workspaces.iter().map(|workspace| workspace.id.as_str()))
+        .collect();
     let mut state = load_repository_state(config, &repository)?;
     let registered: BTreeSet<_> = repository
         .worktrees
         .iter()
         .map(|worktree| canonical_or_absolute(&worktree.path))
         .collect();
-    let old_slots = state.slots.len();
-    let old_workspaces = state.workspaces.len();
+    let loaded_records = state.slots.len() + state.workspaces.len();
     state
         .slots
         .retain(|slot| registered.contains(&canonical_or_absolute(&slot.path)));
     state
         .workspaces
         .retain(|workspace| registered.contains(&canonical_or_absolute(&workspace.path)));
-    let removed_broken_records = old_slots + old_workspaces - state.slots.len() - state.workspaces.len();
-    let added_slots = state.slots.len().saturating_sub(raw_count);
-    let added_workspaces = state.workspaces.len().saturating_sub(raw_count + added_slots);
+    let removed_broken_records = loaded_records - state.slots.len() - state.workspaces.len();
+    let added_slots = state
+        .slots
+        .iter()
+        .filter(|slot| !known_slots.contains(slot.id.as_str()))
+        .count();
+    let added_workspaces = state
+        .workspaces
+        .iter()
+        .filter(|workspace| !known_workspaces.contains(workspace.id.as_str()))
+        .count();
     save_repository_state(config, &repository, &state)?;
     Ok(RepairReport {
         added_slots,

@@ -8,18 +8,21 @@ use crate::model::{
 };
 use crate::state::lock::is_pid_alive;
 use crate::state::paths::{active_root, repository_state_path, slots_root};
-use crate::util::{is_inside, now_iso, random_short, read_json, write_json};
+use crate::util::{is_inside, now_iso, random_short, read_json, short_hash, write_json};
 
 pub fn load_repository_state(config: &AcreConfig, repository: &Repository) -> Result<RepositoryState> {
-    let path = repository_state_path(config, repository);
-    let stored = read_json::<RepositoryState>(&path).unwrap_or_default();
-    let state = match stored {
-        Some(state) if state.schema_version == 1 && state.repository_id == repository.id => {
-            reconcile_state(state, &repository.worktrees)
-        }
-        _ => empty_state(repository),
+    let state = match stored_repository_state(config, repository) {
+        Some(state) => reconcile_state(state, &repository.worktrees),
+        None => empty_state(repository),
     };
     Ok(recover_owned_worktrees(config, repository, state))
+}
+
+/// The state persisted for this repository, before reconciliation and recovery.
+pub fn stored_repository_state(config: &AcreConfig, repository: &Repository) -> Option<RepositoryState> {
+    read_json::<RepositoryState>(&repository_state_path(config, repository))
+        .unwrap_or_default()
+        .filter(|state| state.schema_version == 1 && state.repository_id == repository.id)
 }
 
 pub fn save_repository_state(
@@ -170,8 +173,10 @@ fn recover_owned_worktrees(
         }
         if is_inside(&active_root(config, repository), &path) && !workspace_paths.contains(&path) {
             let local_branch = worktree.branch.clone();
+            // The id derives from the path so every load agrees on the identity of a
+            // workspace that was never persisted.
             state.workspaces.push(WorkspaceRecord {
-                id: format!("recovered-{}", random_short(10)),
+                id: format!("recovered-{}", short_hash(path.to_string_lossy().as_bytes(), 10)),
                 repository_id: repository.id.clone(),
                 path,
                 ownership: WorkspaceOwnership::Acre,
