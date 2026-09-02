@@ -1,5 +1,8 @@
+//! `acre shell init` and `acre completion`.
+
+use crate::cli::CommandContext;
 use crate::error::{Result, exit};
-use crate::model::{CommandContext, SupportedShell};
+use crate::shell::SupportedShell;
 use crate::shell::generator::{generate_completion, generate_shell_integration};
 use crate::ui::output::Renderer;
 

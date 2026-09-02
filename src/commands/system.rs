@@ -1,12 +1,15 @@
+//! `acre system`: warm, inspect, doctor, repair, gc.
+
+use crate::cli::CommandContext;
 use crate::error::{Result, exit};
 use crate::git::repository::discover_repository;
 use crate::git::runner::{RunOptions, decode_stdout, run_process};
-use crate::model::{CommandContext, WorkspaceStatus};
-use crate::pool::broker::warm_repository;
-use crate::pool::maintenance::{gc_repository, repair_repository_state};
+use crate::model::WorkspaceStatus;
 use crate::state::config::load_config;
 use crate::state::repository::load_repository_state;
 use crate::ui::output::Renderer;
+use crate::workspace::maintain::{gc_repository, repair_repository_state};
+use crate::workspace::pool::warm_repository;
 
 pub fn command_system_warm(context: &CommandContext, slots: Option<usize>) -> Result<i32> {
     let config = load_config()?;

@@ -1,21 +1,25 @@
+//! Bare `acre` and `acre <target>`: pick or resolve a target and open it.
+
 use std::ffi::OsString;
 
+use crate::cli::CommandContext;
+use crate::commands::opened::navigate_to_materialized;
 use crate::error::{AcreError, Result, exit};
-use crate::git::refs::list_refs;
-use crate::git::repository::discover_repository;
+use crate::git::refs::{GitRef, GitRefKind, list_refs};
+use crate::git::repository::{Repository, discover_repository};
 use crate::git::runner::run_passthrough;
-use crate::model::{CommandContext, GitRef, GitRefKind};
-use crate::pool::broker::{
-    LeaseRequest, MaterializeOptions, lease_workspace_by_path, materialize_workspace,
-    release_shell_session_lease, release_workspace_lease,
-};
-use crate::shell::navigation::{navigate_direct, navigate_to_materialized};
+use crate::model::RepositoryState;
+use crate::shell::navigation::navigate_direct;
 use crate::state::config::load_config;
 use crate::state::repository::load_repository_state;
 use crate::state::shell::read_shell_state;
-use crate::target::resolve_existing_target;
 use crate::ui::output::Renderer;
 use crate::ui::picker::{PickerResult, PickerRow, pick};
+use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
+use crate::workspace::lease::{
+    LeaseRequest, lease_workspace_by_path, release_shell_session_lease, release_workspace_lease,
+};
+use crate::workspace::resolve::resolve_existing_target;
 
 pub fn command_open(
     context: &CommandContext,
@@ -117,10 +121,7 @@ pub fn command_open(
     Ok(exit::SUCCESS)
 }
 
-fn picker_rows(
-    repository: &crate::model::Repository,
-    state: &crate::model::RepositoryState,
-) -> Result<Vec<PickerRow<String>>> {
+fn picker_rows(repository: &Repository, state: &RepositoryState) -> Result<Vec<PickerRow<String>>> {
     let mut rows = Vec::new();
     let mut used = std::collections::BTreeSet::new();
     for worktree in &repository.worktrees {

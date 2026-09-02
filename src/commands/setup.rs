@@ -1,8 +1,11 @@
+//! `acre setup`: install the shell integration block and create the configuration.
+
 use std::fs;
 use std::path::PathBuf;
 
+use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
-use crate::model::{CommandContext, SupportedShell};
+use crate::shell::SupportedShell;
 use crate::state::config::{ensure_default_config_file, load_config};
 use crate::state::paths::config_path;
 use crate::ui::output::Renderer;

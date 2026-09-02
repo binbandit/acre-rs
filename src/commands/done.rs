@@ -1,22 +1,24 @@
+//! `acre done`: return a workspace, resuming after the shell has moved out of it when needed.
+
 use std::path::{Path, PathBuf};
 
+use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
-use crate::git::repository::{discover_repository, discover_repository_from_common_dir};
+use crate::git::repository::{Repository, discover_repository, discover_repository_from_common_dir};
 use crate::git::status::read_status;
-use crate::model::{CommandContext, PendingDoneOperation, Repository, WorkspaceOwnership, WorkspaceRecord};
-use crate::pool::assessment::AssessOptions;
-use crate::pool::broker::{
-    ReturnOptions, assess_workspace_for_return, release_shell_session_lease, return_workspace,
-};
+use crate::model::{PendingDoneOperation, WorkspaceOwnership, WorkspaceRecord};
 use crate::shell::directive::write_resume_directive;
 use crate::shell::navigation::navigate_direct;
 use crate::state::config::load_config;
 use crate::state::operations::{read_pending_done, remove_pending_operation, save_pending_done};
 use crate::state::repository::load_repository_state;
 use crate::state::shell::read_shell_state;
-use crate::target::resolve_existing_target;
 use crate::ui::output::Renderer;
 use crate::util::{canonical_or_absolute, is_inside, now_iso, random_id};
+use crate::workspace::assess::{AssessOptions, DoneAssessment, assess_workspace_for_return};
+use crate::workspace::lease::release_shell_session_lease;
+use crate::workspace::release::{ReturnOptions, return_workspace};
+use crate::workspace::resolve::resolve_existing_target;
 
 pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
     let config = load_config()?;
@@ -291,7 +293,7 @@ fn safe_destination(
         .unwrap_or_else(|| primary.path.clone()))
 }
 
-fn render_unsafe(context: &CommandContext, assessment: &crate::model::DoneAssessment) {
+fn render_unsafe(context: &CommandContext, assessment: &DoneAssessment) {
     let renderer = Renderer::new(context);
     if context.global.json {
         renderer.json(&serde_json::json!({

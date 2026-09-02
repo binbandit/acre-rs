@@ -1,11 +1,14 @@
+//! `acre new <branch>`: create a branch and open it in a warm workspace.
+
+use crate::cli::CommandContext;
+use crate::commands::opened::{materialized_payload, navigate_to_materialized, render_materialized_summary};
 use crate::error::{Result, exit};
 use crate::git::repository::discover_repository;
-use crate::model::CommandContext;
-use crate::pool::broker::{LeaseRequest, MaterializeOptions, materialize_workspace};
-use crate::shell::navigation::{materialized_payload, navigate_to_materialized, render_materialized_summary};
 use crate::state::config::load_config;
-use crate::target::resolve_new_target;
 use crate::ui::output::Renderer;
+use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
+use crate::workspace::lease::LeaseRequest;
+use crate::workspace::resolve::resolve_new_target;
 
 pub fn command_new(
     context: &CommandContext,

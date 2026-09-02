@@ -1,16 +1,17 @@
+//! `acre acquire` and `acre release`: the lease-based API for editors and agents.
+
+use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
 use crate::git::repository::{discover_repository, discover_repository_from_common_dir};
-use crate::model::CommandContext;
-use crate::pool::assessment::AssessOptions;
-use crate::pool::broker::{
-    LeaseRequest, MaterializeOptions, ReturnOptions, materialize_workspace, release_workspace_lease,
-    return_workspace,
-};
 use crate::state::config::load_config;
 use crate::state::index::load_repository_index;
 use crate::state::repository::load_repository_state;
-use crate::target::{resolve_existing_target, resolve_new_target};
 use crate::ui::output::Renderer;
+use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
+use crate::workspace::assess::AssessOptions;
+use crate::workspace::lease::{LeaseRequest, release_workspace_lease};
+use crate::workspace::release::{ReturnOptions, return_workspace};
+use crate::workspace::resolve::{resolve_existing_target, resolve_new_target};
 
 pub fn command_acquire(
     context: &CommandContext,

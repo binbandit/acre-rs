@@ -1,16 +1,44 @@
-use std::collections::BTreeSet;
-use std::path::Path;
+//! Turns what the user typed into an exact Git target, never guessing and never creating.
 
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::fetch_ref;
-use crate::git::refs::{list_refs, resolve_oid, validate_branch_name};
-use crate::model::{
-    GitRefKind, Repository, RepositoryState, ResolvedTarget, StoredTarget, TargetKind, TrustLevel,
-};
+use crate::git::refs::{GitRefKind, list_refs, resolve_oid, validate_branch_name};
+use crate::git::repository::Repository;
+use crate::git::worktrees::GitWorktree;
+use crate::model::{PullRequestTarget, RepositoryState, StoredTarget, TargetKind, TrustLevel};
 use crate::provider::github::{
     ensure_pull_request_object, parse_pull_request_selector, resolve_pull_request,
 };
 use crate::util::{canonical_or_absolute, is_subsequence};
+use std::collections::BTreeSet;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct ResolvedTarget {
+    pub kind: TargetKind,
+    pub display_name: String,
+    pub oid: String,
+    pub trust: TrustLevel,
+    pub existing_worktree: Option<GitWorktree>,
+    pub local_branch: Option<String>,
+    pub remote_branch: Option<String>,
+    pub remote: Option<String>,
+    pub base_ref: Option<String>,
+    pub pull_request: Option<PullRequestTarget>,
+}
+
+impl From<&ResolvedTarget> for StoredTarget {
+    fn from(target: &ResolvedTarget) -> Self {
+        Self {
+            kind: target.kind,
+            display_name: target.display_name.clone(),
+            oid: target.oid.clone(),
+            local_branch: target.local_branch.clone(),
+            remote_branch: target.remote_branch.clone(),
+            pull_request: target.pull_request.clone(),
+        }
+    }
+}
 
 pub fn resolve_existing_target(
     repository: &Repository,

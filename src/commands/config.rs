@@ -1,8 +1,10 @@
+//! `acre config`: show, edit, and set user configuration.
+
 use std::process::{Command, Stdio};
 
+use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
 use crate::git::repository::discover_repository;
-use crate::model::CommandContext;
 use crate::state::config::{
     default_config, load_config, save_config, set_config_value, write_default_repo_config,
 };

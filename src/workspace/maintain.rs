@@ -1,9 +1,12 @@
+//! Repair and garbage collection for a repository's Acre state.
+
 use std::collections::BTreeSet;
 
 use crate::error::Result;
 use crate::git::operations::{prune_worktrees, remove_worktree, repair_worktrees};
+use crate::git::repository::Repository;
 use crate::git::status::read_status;
-use crate::model::{AcreConfig, Repository, RepositoryState, WorkspaceSlot, WorkspaceStatus};
+use crate::model::{AcreConfig, RepositoryState, WorkspaceSlot, WorkspaceStatus};
 use crate::state::repository::{LockedRepository, save_repository_state, stored_repository_state};
 use crate::util::{age_millis, canonical_or_absolute};
 

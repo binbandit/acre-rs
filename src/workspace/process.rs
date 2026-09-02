@@ -1,6 +1,16 @@
-use std::path::Path;
+//! Finds processes whose working directory sits inside a workspace, as evidence it is in use.
 
-use crate::model::ProcessUse;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessUse {
+    pub pid: u32,
+    pub command: String,
+    pub cwd: Option<PathBuf>,
+}
 
 pub fn find_processes_using_path(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> {
     #[cfg(target_os = "linux")]
@@ -64,7 +74,6 @@ fn find_linux_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> 
 #[cfg(target_os = "macos")]
 fn find_macos_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> {
     use std::collections::BTreeSet;
-    use std::path::PathBuf;
 
     use crate::git::runner::{RunOptions, run_process};
     use crate::util::is_inside;

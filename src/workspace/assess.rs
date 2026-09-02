@@ -1,10 +1,49 @@
+//! Decides whether a workspace can be returned: nothing unsaved, nothing unknown, nobody using it.
+
 use crate::environment::fingerprint::build_environment_plan;
 use crate::environment::roots::inspect_ignored;
 use crate::environment::seed::changed_seed_files;
 use crate::error::Result;
-use crate::git::status::{in_progress_operation, read_status};
-use crate::model::{AcreConfig, DoneAssessment, Repository, RepositoryState, WorkspaceRecord};
-use crate::pool::process::find_processes_using_path;
+use crate::git::repository::{Repository, discover_repository};
+use crate::git::status::{WorkingTreeStatus, in_progress_operation, read_status};
+use crate::model::{AcreConfig, RepositoryState, WorkspaceLease, WorkspaceRecord};
+use crate::state::repository::load_repository_state;
+use crate::workspace::missing_workspace;
+use crate::workspace::process::{ProcessUse, find_processes_using_path};
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoneAssessment {
+    pub workspace: WorkspaceRecord,
+    pub status: WorkingTreeStatus,
+    pub operation: Option<String>,
+    pub locked: bool,
+    pub lock_reason: Option<String>,
+    pub new_ignored: Vec<String>,
+    pub changed_seed_files: Vec<String>,
+    pub leases: Vec<WorkspaceLease>,
+    pub processes: Vec<ProcessUse>,
+    pub safe: bool,
+    pub reasons: Vec<String>,
+}
+
+/// Loads fresh state and assesses one workspace without taking the repository lock.
+pub fn assess_workspace_for_return(
+    config: &AcreConfig,
+    repository: &Repository,
+    workspace_id: &str,
+    options: &AssessOptions,
+) -> Result<DoneAssessment> {
+    let repository = discover_repository(&repository.top_level)?;
+    let state = load_repository_state(config, &repository)?;
+    let workspace = state
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == workspace_id)
+        .ok_or_else(|| missing_workspace(workspace_id))?;
+    assess_workspace(&repository, &state, workspace, config, options)
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct AssessOptions {
