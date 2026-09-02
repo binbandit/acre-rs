@@ -100,12 +100,11 @@ pub fn is_pid_alive(pid: u32) -> bool {
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        std::process::Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .status()
-            // EPERM (another user's process) also fails here, so a lock held across users reads as abandoned.
-            .is_ok_and(|status| status.success())
+        // ps sees other users' processes, where kill -0 would report EPERM and make a live owner look dead.
+        std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "pid="])
+            .output()
+            .is_ok_and(|output| output.status.success() && !output.stdout.trim_ascii().is_empty())
     }
     #[cfg(windows)]
     {
@@ -127,4 +126,16 @@ fn lock_is_clearly_abandoned(path: &Path) -> bool {
         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
         // Writing owner.json takes milliseconds; a bare dir older than that is a crash, not a race.
         .is_none_or(|age| age > Duration::from_secs(5))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pid_liveness_tracks_real_processes() {
+        assert!(is_pid_alive(std::process::id()));
+        assert!(!is_pid_alive(0));
+        assert!(!is_pid_alive(u32::MAX - 1));
+    }
 }
