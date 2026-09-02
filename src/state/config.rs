@@ -12,6 +12,7 @@ use crate::state::paths::{config_path, default_acre_root};
 use crate::state::storage::{read_json, write_json};
 use crate::util::validate_relative_path;
 
+// These impls are also what serde fills in for fields missing from config.json.
 impl Default for AcreConfig {
     fn default() -> Self {
         Self {
@@ -70,6 +71,7 @@ pub fn save_config(config: &AcreConfig) -> Result<()> {
 pub fn load_repo_config(repository_root: &Path) -> Result<RepoConfig> {
     let path = repository_root.join(".acre.json");
     let config = read_json::<RepoConfig>(&path)?.unwrap_or_default();
+    // .acre.json is repository data; validate it like user config before trusting a single path.
     if let Some(environment) = &config.environment {
         validate_environment_paths(
             environment

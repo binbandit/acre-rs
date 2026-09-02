@@ -11,6 +11,7 @@ pub fn default_acre_root() -> PathBuf {
 }
 
 pub fn acre_root(config: &AcreConfig) -> PathBuf {
+    // Config may say `~/.acre` or a relative path; resolve it once here.
     absolute(&config.root)
 }
 
@@ -29,6 +30,7 @@ pub fn repository_index_path(config: &AcreConfig) -> PathBuf {
 pub fn repository_root(config: &AcreConfig, repository: &Repository) -> PathBuf {
     acre_root(config)
         .join("repositories")
+        // Name for humans browsing the directory, id hash so two repos called `api` don't collide.
         .join(repository_slug(&repository.name, &repository.id))
 }
 

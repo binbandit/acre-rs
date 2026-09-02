@@ -26,6 +26,7 @@ pub struct RepositoryLock {
 
 impl RepositoryLock {
     pub fn acquire(path: &Path) -> Result<Self> {
+        // Long enough to outlast a slow clone in another process; a real deadlock still surfaces.
         let timeout = Duration::from_secs(30);
         if let Some(parent) = path.parent() {
             ensure_directory(parent)?;
@@ -41,6 +42,7 @@ impl RepositoryLock {
                         pid: std::process::id(),
                         created_at: now_iso(),
                     };
+                    // The owner file is what lets a later process tell a crash from a live holder.
                     write_json(&path.join("owner.json"), &owner)?;
                     return Ok(Self {
                         path: path.to_path_buf(),
@@ -91,6 +93,7 @@ impl Drop for RepositoryLock {
 }
 
 pub fn is_pid_alive(pid: u32) -> bool {
+    // pid 0 is the idle process on Windows and never a lease holder anywhere; short-circuit it.
     if pid == 0 {
         return false;
     }
@@ -109,6 +112,7 @@ pub fn is_pid_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
         let output = std::process::Command::new("tasklist")
+            // tasklist has no exit status worth trusting; look for the pid in its output instead.
             .args(["/FI", &format!("PID eq {pid}"), "/NH"])
             .output();
         output.is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))

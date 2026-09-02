@@ -17,6 +17,7 @@ pub fn seed_files_only(
     files: &[String],
     trust: TrustLevel,
 ) -> Result<Vec<String>> {
+    // Fork PRs get nothing: their code could read whatever we copy in.
     if trust != TrustLevel::Trusted {
         return Ok(Vec::new());
     }
@@ -76,6 +77,7 @@ pub fn snapshot_seed_files(root: &Path, files: &[String]) -> Result<Vec<SeedFile
 pub fn changed_seed_files(root: &Path, baseline: &[SeedFileSnapshot]) -> Result<Vec<String>> {
     let mut changed = Vec::new();
     for snapshot in baseline {
+        // A deleted seed file counts as changed too; the user may have moved secrets out on purpose.
         if seed_path_hash(&root.join(&snapshot.path))?.as_deref() != Some(&snapshot.hash) {
             changed.push(snapshot.path.clone());
         }
@@ -97,6 +99,7 @@ fn seed_path_hash(target: &Path) -> Result<Option<String>> {
     if metadata.file_type().is_symlink() {
         let value = fs::read_link(target)
             .map_err(|error| AcreError::io(format!("could not read {}", target.display()), error))?;
+        // Hash the link target, not what it points at; the file behind it isn't ours.
         return Ok(Some(sha256(format!("symlink\0{}", value.display()))));
     }
     if metadata.is_file() {

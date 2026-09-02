@@ -12,6 +12,7 @@ pub struct EcosystemDefinition {
     pub seed_files: &'static [&'static str],
 }
 
+// Every file any ecosystem looks at, read in one git call; each definition then picks its own.
 pub const ALL_FINGERPRINT_FILES: &[&str] = &[
     "package.json",
     "pnpm-lock.yaml",
@@ -152,6 +153,7 @@ const GO: EcosystemDefinition = EcosystemDefinition {
 
 pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefinition> {
     let mut result = Vec::new();
+    // Substring checks on the raw text: cheap, and a false positive only adds a harmless cache root.
     let package_json = files
         .get("package.json")
         .map(|value| String::from_utf8_lossy(value))
@@ -174,6 +176,7 @@ pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefi
         result.push(NPM);
     }
 
+    // Tooling stacks on top of the package manager, so these are checked independently.
     if files.contains_key("turbo.json") || package_json.contains("\"turbo\"") {
         result.push(TURBO);
     }

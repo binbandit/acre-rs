@@ -78,6 +78,7 @@ fn reconcile_state(mut state: RepositoryState, worktrees: &[GitWorktree]) -> Rep
         }
     }
 
+    // Leases on broken workspaces would block a repair forever.
     let valid: BTreeSet<&str> = state
         .workspaces
         .iter()
@@ -208,6 +209,7 @@ fn recover_owned_worktrees(
                     } else {
                         TargetKind::Worktree
                     },
+                    // A recovered detached worktree is named by its commit; there is nothing better to call it.
                     display_name: local_branch.clone().unwrap_or_else(|| {
                         format!("detached-{}", &worktree.head[..worktree.head.len().min(8)])
                     }),
@@ -216,6 +218,7 @@ fn recover_owned_worktrees(
                     remote_branch: None,
                     pull_request: None,
                 },
+                // Trust only affects pooling and seeding; with no slot and no seeded paths, neither can happen.
                 trust: TrustLevel::Trusted,
                 environment: None,
                 baseline_ignored: Vec::new(),

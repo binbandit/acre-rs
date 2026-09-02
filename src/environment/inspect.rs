@@ -15,6 +15,7 @@ pub fn inspect_environment(root: &Path, plan: &EnvironmentPlan) -> Result<Enviro
             && plan.required_roots.iter().all(|root| layout.has_cache_root(root)))
     {
         EnvironmentState::Ready
+    // Some caches but a required root missing: worth reusing, not yet usable.
     } else if !layout.cache_roots.is_empty() {
         EnvironmentState::Warm
     } else {

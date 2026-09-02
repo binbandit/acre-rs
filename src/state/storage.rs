@@ -16,6 +16,7 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
             .map_err(|error| AcreError::json(format!("could not parse {}", path.display()), error)),
+        // Missing is an ordinary answer; every caller has a default for it.
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(AcreError::io(format!("could not read {}", path.display()), error)),
     }
@@ -23,6 +24,7 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| AcreError::json(format!("could not encode {}", path.display()), error))?;
+    // Trailing newline so the file diffs and cats cleanly.
     bytes.push(b'\n');
     write_atomic(path, &bytes)
 }
@@ -38,6 +40,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
+        // Config and state can carry paths and copied secrets; owner-only from the first byte.
         options.mode(0o600);
     }
     let mut file = options

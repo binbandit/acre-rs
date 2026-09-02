@@ -28,6 +28,7 @@ pub fn build_environment_plan(
     reference: &str,
     config: &AcreConfig,
 ) -> Result<EnvironmentPlan> {
+    // Read from the commit, not the worktree: the fingerprint must not depend on uncommitted edits.
     let files = read_files_at_ref(&repository.top_level, reference, ALL_FINGERPRINT_FILES)?;
     let ecosystems = detect_ecosystems(&files);
     // .acre.json comes from the primary checkout on disk, not from the target commit.
@@ -97,6 +98,7 @@ pub fn build_environment_plan(
         "cacheRoots": cache_roots,
         "requiredRoots": required_roots,
     });
+    // serde_json sorts map keys, so this serialisation is stable across runs.
     let fingerprint = sha256(serde_json::to_vec(&fingerprint_value)?);
 
     Ok(EnvironmentPlan {
@@ -113,6 +115,7 @@ fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
     if file != "package.json" {
         return content.to_vec();
     }
+    // Unparseable JSON is hashed as-is; better a spurious miss than a wrong hit.
     let Ok(parsed) = serde_json::from_slice::<Value>(content) else {
         return content.to_vec();
     };
@@ -171,6 +174,7 @@ fn canonical(value: &Value) -> Value {
 
 fn os_major() -> String {
     Command::new("uname")
+        // Kernel release major: on macOS that tracks the OS version, which native modules care about.
         .arg("-r")
         .output()
         .ok()

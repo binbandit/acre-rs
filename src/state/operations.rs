@@ -12,6 +12,7 @@ pub fn save_pending_done(config: &AcreConfig, operation: &PendingDoneOperation) 
 
 pub fn read_pending_done(config: &AcreConfig, token: &str) -> Result<Option<PendingDoneOperation>> {
     Ok(read_json::<PendingDoneOperation>(&operation_path(config, token))?
+        // Kind guards against a future operation type being resumed by the wrong handler.
         .filter(|operation| operation.kind == "done"))
 }
 

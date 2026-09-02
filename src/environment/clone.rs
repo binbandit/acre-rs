@@ -37,6 +37,7 @@ pub fn seed_environment(
     let mut cloned_bytes = 0;
     let mut clone_mode = CloneMode::None;
 
+    // Only roots the source actually has; the plan lists what could exist, not what does.
     for cache_root in inspect_ignored(source_root, &plan.cache_roots)?.cache_roots {
         let source = source_root.join(&cache_root);
         let destination = destination_root.join(&cache_root);
@@ -56,6 +57,7 @@ pub fn seed_environment(
         };
     }
 
+    // Seed files come from the primary, never from the cache source, which may be another branch's workspace.
     let seeded_files = seed_files_only(seed_source_root, destination_root, &plan.seed_files, trust)?;
     let mut snapshot = inspect_environment(destination_root, plan)?;
     snapshot.source = Some(source_root.to_path_buf());
@@ -125,6 +127,7 @@ fn clone_with_platform_tool(source: &Path, destination: &Path) -> Option<CloneRe
         program,
         &args,
         RunOptions {
+            // A node_modules clone on a slow disk can genuinely take minutes.
             timeout: Some(Duration::from_secs(30 * 60)),
             ..RunOptions::default()
         },

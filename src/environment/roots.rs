@@ -42,6 +42,7 @@ pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<Ignore
             found.insert(relative.to_owned());
             continue;
         }
+        // Only directories can be opened up; an ignored file is unknown data outright.
         if entry.ends_with('/') {
             if let Some(nested) = cache_roots_filling(worktree, relative, cache_roots) {
                 found.extend(nested);

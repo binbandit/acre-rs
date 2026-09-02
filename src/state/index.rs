@@ -18,6 +18,7 @@ struct RepositoryIndex {
 
 pub fn remember_repository(config: &AcreConfig, repository: &Repository) -> Result<()> {
     let mut repositories = load_repository_index(config)?;
+    // Replace rather than append, so a moved checkout updates its paths.
     repositories.retain(|record| record.id != repository.id);
     repositories.push(KnownRepository {
         id: repository.id.clone(),
