@@ -28,6 +28,7 @@ pub fn warm_repository(
     let repository = locked.repository.clone();
     let oid = warm_base_oid(&repository)?;
     let plan = build_environment_plan(&repository, &oid, config)?;
+    // Never warm past max_slots, or gc would immediately evict what we just built.
     let requested = requested_slots
         .unwrap_or(config.pool.min_slots)
         .min(config.pool.max_slots);
@@ -102,6 +103,7 @@ pub fn select_slot(
                     .is_none_or(|environment| environment.state == EnvironmentState::Cold)
             })
         })
+        // Last resort: recycle the stalest slot, caches and all.
         .or_else(|| healthy.iter().min_by_key(|slot| &slot.last_used_at))
         .map(|slot| (*slot).clone());
     match chosen {
@@ -120,9 +122,11 @@ fn create_slot(
     ensure_directory(&slots_root(config, repository))?;
     let id = random_short(12);
     let slot_path = slots_root(config, repository).join(&id);
+    // Detached from the start: a slot must never hold a branch that `git branch -d` would refuse to delete.
     create_detached_worktree(repository, &slot_path, oid)?;
     let mut environment = inspect_environment(&slot_path, plan)?;
     if let Some(source) = find_environment_source(config, repository, state, plan, &slot_path)? {
+        // Cloning is a bonus; a slot without caches is still a usable slot.
         if let Ok(seeded) = seed_environment(
             &source,
             &slot_path,
@@ -183,6 +187,7 @@ pub fn find_environment_source(
     if primary == excluded_path || !primary.exists() {
         return Ok(None);
     }
+    // Fingerprint the primary at its own HEAD; its caches match only if it sits on the same generation.
     let primary_oid = repository
         .worktrees
         .first()

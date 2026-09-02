@@ -21,6 +21,7 @@ impl LeaseRequest {
     pub fn for_shell(shell: &ShellBridge) -> Option<Self> {
         let session_id = shell.session_id.clone().filter(|_| shell.active)?;
         Some(Self {
+            // Holder names are for humans in `acre system inspect`; the id is what identifies the lease.
             holder: format!("shell:{session_id}"),
             pid: shell.pid,
             session_id: Some(session_id),

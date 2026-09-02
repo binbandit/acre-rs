@@ -75,6 +75,7 @@ pub fn parse_worktree_porcelain(buffer: &[u8]) -> Vec<GitWorktree> {
             continue;
         }
         let text = String::from_utf8_lossy(raw);
+        // Flags like `detached` and `bare` have no value.
         let (key, value) = text.split_once(' ').unwrap_or((&text, ""));
         match key {
             "worktree" => {
@@ -109,6 +110,7 @@ pub fn parse_worktree_porcelain(buffer: &[u8]) -> Vec<GitWorktree> {
 
 pub fn with_existence(mut worktrees: Vec<GitWorktree>) -> Vec<GitWorktree> {
     for worktree in &mut worktrees {
+        // git only marks a worktree prunable once it re-scans; check the directory ourselves for the current truth.
         worktree.exists = worktree.path.is_dir();
     }
     worktrees

@@ -56,6 +56,7 @@ pub fn parse_status(buffer: &[u8]) -> WorkingTreeStatus {
 
     while index < fields.len() {
         let row = &fields[index];
+        // Untracked entries are `? path`, nothing else to parse.
         if let Some(path) = row.strip_prefix("? ") {
             untracked += 1;
             entries.push(StatusEntry {
@@ -70,6 +71,7 @@ pub fn parse_status(buffer: &[u8]) -> WorkingTreeStatus {
         }
         if row.starts_with("1 ") || row.starts_with("2 ") || row.starts_with("u ") {
             let parts: Vec<&str> = row.split(' ').collect();
+            // XY: index state then worktree state; `.` means unchanged on that side.
             let xy = parts.get(1).copied().unwrap_or("..");
             let rename = row.starts_with("2 ");
             // Porcelain v2 rows: `1 XY sub mH mI mW hH hI path`, `2 XY sub mH mI mW hH hI Xscore path`
@@ -133,6 +135,7 @@ pub fn parse_status(buffer: &[u8]) -> WorkingTreeStatus {
         modified,
         untracked,
         conflicted,
+        // Any entry at all, staged or not, is work we must not throw away.
         dirty: !entries.is_empty(),
         entries,
         fingerprint,
@@ -159,6 +162,7 @@ pub fn in_progress_operation(cwd: &Path) -> Result<Option<String>> {
     // Same order as the --git-path arguments above; a rebase has two marker directories.
     let names = ["merge", "rebase", "rebase", "cherry-pick", "revert"];
     for (path, name) in String::from_utf8_lossy(&result.stdout).lines().zip(names) {
+        // rev-parse prints the paths whether or not they exist; presence is the signal.
         if Path::new(path).exists() {
             return Ok(Some(name.to_owned()));
         }
@@ -175,6 +179,7 @@ pub fn list_ignored_entries(cwd: &Path) -> Result<Vec<String>> {
             "--others",
             "--ignored",
             "--exclude-standard",
+            // Collapse ignored directories to one entry; we don't need every file inside node_modules.
             "--directory",
             "--no-empty-directory",
             "-z",

@@ -12,6 +12,7 @@ pub fn read_files_at_ref(cwd: &Path, reference: &str, files: &[&str]) -> Result<
     }
     let mut input = String::new();
     for file in files {
+        // One `ref:path` request per line; git answers in the same order, which parse_batch relies on.
         input.push_str(reference);
         input.push(':');
         input.push_str(file);
@@ -36,6 +37,7 @@ fn parse_batch(output: &[u8], files: &[&str]) -> BTreeMap<String, Vec<u8>> {
             break;
         };
         let newline = offset + relative_newline;
+        // Header is `<oid> <type> <size>` or `<request> missing`.
         let header = String::from_utf8_lossy(&output[offset..newline]);
         offset = newline + 1;
         // A missing file gets a header but no body, so there is nothing to skip past.

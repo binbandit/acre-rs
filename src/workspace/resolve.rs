@@ -84,6 +84,7 @@ pub fn resolve_existing_target(
         return Ok(target);
     }
     let refs = list_refs(&repository.top_level)?;
+    // `remote:` skips local branches on purpose: the user is asking for the remote's copy.
     if typed.kind != SelectorKind::Remote {
         if let Some(local) = refs
             .iter()
@@ -191,6 +192,7 @@ fn remote_branch_target(refs: &[GitRef], typed: &TypedSelector) -> Result<Option
     };
     let matches: Vec<&GitRef> = match remotes().find(|reference| reference.qualified_name() == value) {
         Some(explicit) => vec![explicit],
+        // `worktree:` never falls through to remotes; a path is a path.
         None if typed.kind == SelectorKind::Worktree => Vec::new(),
         None => remotes()
             .filter(|reference| reference.short_name == value)
@@ -249,6 +251,7 @@ pub fn resolve_new_target(
     from: Option<&str>,
     fresh: bool,
 ) -> Result<ResolvedTarget> {
+    // Ask git rather than guessing the ref-name rules ourselves.
     if !validate_branch_name(&repository.top_level, branch)? {
         return Err(AcreError::new(
             "ACRE_INVALID_BRANCH",
@@ -392,6 +395,7 @@ fn closest(needle: &str, candidates: &[String]) -> Vec<String> {
             (score > 0).then_some((score, candidate))
         })
         .collect();
+    // Best score first, then alphabetical so the list is stable between runs.
     matches.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
     matches
         .into_iter()

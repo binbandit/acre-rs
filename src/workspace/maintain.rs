@@ -52,6 +52,7 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
         .flat_map(|state| state.workspaces.iter().map(|workspace| workspace.id.as_str()))
         .collect();
     let mut state = locked.state.clone();
+    // After prune, anything git no longer registers is gone for good; drop its record.
     let registered: BTreeSet<_> = repository
         .worktrees
         .iter()
@@ -109,6 +110,7 @@ pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Resu
     let mut removed = Vec::new();
     let mut skipped = Vec::new();
     for slot in candidates {
+        // Look before removing: a slot someone edited by hand is kept and reported.
         match read_status(&slot.path) {
             // Data retention wins: a dirty slot is somebody's work, whatever our records say.
             Ok(status) if status.dirty => skipped.push(GcSkipped {

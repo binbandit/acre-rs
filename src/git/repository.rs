@@ -83,6 +83,7 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
     let top_level = PathBuf::from(lines[0]);
     let git_dir = PathBuf::from(lines[1]);
     let common_dir = PathBuf::from(lines[2]);
+    // git happily lists worktrees whose directories have been deleted, so check the disk ourselves.
     let worktrees = with_existence(list_worktrees(&top_level)?);
     let config = read_repository_config(&top_level)?;
     // origin by convention, otherwise whichever remote sorts first so the choice is at least stable.
@@ -198,6 +199,7 @@ fn read_repository_config(cwd: &Path) -> Result<RepositoryConfigSnapshot> {
         .filter(|record| !record.is_empty())
     {
         let text = String::from_utf8_lossy(record);
+        // --null puts a newline between key and value and NUL between records.
         let Some((key, value)) = text.split_once('\n') else {
             continue;
         };

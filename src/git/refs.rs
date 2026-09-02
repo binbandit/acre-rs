@@ -35,6 +35,7 @@ impl GitRef {
 }
 
 pub fn list_refs(cwd: &Path) -> Result<Vec<GitRef>> {
+    // NUL-separated so branch names with odd characters survive; the trailing %00 ends each record.
     let format = "%(refname)%00%(objectname)%00%(upstream)%00";
     let result = run_git(
         cwd,
@@ -72,6 +73,7 @@ pub fn parse_refs(buffer: &[u8]) -> Vec<GitRef> {
                     oid: oid.to_owned(),
                     kind: GitRefKind::Local,
                     remote: None,
+                    // Shortened to `origin/main`, which is how the picker and completion present it.
                     upstream: (!upstream.is_empty()).then(|| {
                         upstream
                             .strip_prefix("refs/remotes/")

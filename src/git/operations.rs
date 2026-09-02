@@ -11,6 +11,7 @@ use crate::model::{StoredTarget, TargetKind};
 use crate::util::ensure_directory;
 use crate::workspace::resolve::ResolvedTarget;
 
+// Generous: worktree add on a big repo rewrites the index; fetch gets its own longer limit.
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub fn create_detached_worktree(repository: &Repository, target_path: &Path, reference: &str) -> Result<()> {
@@ -32,6 +33,7 @@ pub fn move_worktree(repository: &Repository, from: &Path, to: &Path) -> Result<
     if let Some(parent) = to.parent() {
         ensure_directory(parent)?;
     }
+    // Git would refuse anyway; failing early keeps the message ours.
     if to.exists() {
         return Err(path_exists(to));
     }
@@ -75,6 +77,7 @@ pub fn bind_target(repository: &Repository, workspace_path: &Path, target: &Reso
         }
         TargetKind::RemoteBranch => {
             let branch = required(target.local_branch.as_deref(), "Remote branch")?;
+            // Create the local branch at the remote's commit, then track it, like `git switch -c --track`.
             let remote_branch = required(target.remote_branch.as_deref(), "Remote branch")?;
             git(workspace_path, &["switch", "--create", branch, &target.oid])?;
             git(
@@ -82,6 +85,7 @@ pub fn bind_target(repository: &Repository, workspace_path: &Path, target: &Reso
                 &["branch", "--set-upstream-to", remote_branch, branch],
             )?;
         }
+        // PR heads are checked out detached: there is no local branch to own, and none gets created.
         TargetKind::PullRequest => {
             git(workspace_path, &["switch", "--detach", &target.oid])?;
         }

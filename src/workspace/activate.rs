@@ -60,6 +60,7 @@ pub fn materialize_workspace(
 
     // An existing worktree, Acre-owned or not, is opened where it already is.
     if let Some(existing) = &target.existing_worktree {
+        // An existing worktree we've never seen becomes an external record: observed, never mutated.
         let workspace = match state.workspace_at(&existing.path) {
             Some(workspace) => workspace.clone(),
             None => {
@@ -118,6 +119,7 @@ pub fn materialize_workspace(
         ));
     }
 
+    // The plan comes from the target commit's manifests, not from whatever the primary has checked out.
     let plan = build_environment_plan(&repository, &target.oid, config)?;
     let slot = select_slot(config, &repository, state, &plan, &target.oid)?;
     let reused = slot
@@ -141,6 +143,7 @@ pub fn materialize_workspace(
     let active_path = choose_active_path(config, &repository, target, state)?;
     // Remember where it came from: on failure the slot goes back there.
     let idle_path = slot.path.clone();
+    // Move before binding: the branch should never be visible at a pool path.
     move_worktree(&repository, &idle_path, &active_path)?;
 
     // Filled by activate as it copies, so the rollback below knows exactly what to remove.
@@ -200,6 +203,7 @@ fn activate(
 ) -> Result<(WorkspaceRecord, Option<WorkspaceLease>)> {
     // Bind before seeding: the baseline below reads ignore rules, and those belong to the target commit.
     bind_target(repository, active_path, target)?;
+    // Seed files always come from the primary checkout, the one copy the user actually maintains.
     let seed_source = repository.primary_path();
     // Three ways to arrive at caches: already in the slot, cloned from a sibling, or none yet.
     let environment = if reused {
@@ -225,6 +229,7 @@ fn activate(
 
     // Whatever is ignored now was ours; only additions count against `done` later.
     let baseline_ignored = inspect_ignored(active_path, &environment.cache_roots)?.unknown;
+    // Hash what we copied so `done` can tell an edited .env from an untouched one.
     let baseline_seed_files = snapshot_seed_files(active_path, seeded_paths)?;
     let timestamp = now_iso();
     let workspace = WorkspaceRecord {
@@ -243,6 +248,7 @@ fn activate(
         activated_at: timestamp.clone(),
         last_used_at: timestamp.clone(),
     };
+    // The slot record follows the directory: it is the same worktree, now active.
     slot.path = active_path.to_path_buf();
     slot.status = WorkspaceStatus::Active;
     slot.environment = Some(environment);
@@ -327,6 +333,7 @@ fn choose_active_path(
             return Ok(path.clone());
         }
     }
+    // Branch name first, then PR number, then whatever the target is called.
     let name = target
         .local_branch
         .clone()
@@ -386,6 +393,7 @@ fn external_workspace(repository: &Repository, target: &ResolvedTarget, path: &P
 
 /// Tops the pool back up in a detached background process so the caller returns immediately.
 fn launch_replenish(common_dir: &Path) {
+    // Best effort: without a path to ourselves the pool simply stays as it is.
     let Ok(executable) = std::env::current_exe() else {
         return;
     };

@@ -46,12 +46,14 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
     let mut command = Command::new(executable);
     command
         .args(args)
+        // Always piped: git must never block waiting on the user's terminal for input.
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(cwd) = &options.cwd {
         command.current_dir(cwd);
     }
+    // Two error paths below want the same argv attached; build it once before either can fire.
     let details = serde_json::json!({ "executable": executable, "args": args });
 
     let mut child = command.spawn().map_err(|error| {
@@ -124,6 +126,7 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
         duration_ms: started.elapsed().as_millis(),
     };
 
+    // Callers that expect a non-zero answer (rev-parse --verify, check-ignore) opt in per call.
     if options.accepted_statuses.contains(&status_code) {
         Ok(result)
     } else {
@@ -151,6 +154,7 @@ pub fn run_passthrough(executable: &str, args: &[std::ffi::OsString], cwd: &Path
     let status = Command::new(executable)
         .args(args)
         .current_dir(cwd)
+        // The user's command owns the terminal: editors and REPLs need all three streams.
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -171,6 +175,7 @@ pub fn decode_stdout(result: &ProcessResult) -> String {
 
 fn process_failure(result: ProcessResult) -> AcreError {
     let stderr = String::from_utf8_lossy(&result.stderr).trim().to_owned();
+    // argv[0] tells us whether this was git, which gets its own error code and exit class.
     let executable = result
         .argv
         .first()

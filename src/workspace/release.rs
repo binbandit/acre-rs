@@ -50,6 +50,7 @@ pub fn return_workspace(
         .cloned()
         .ok_or_else(|| missing_workspace(workspace_id))?;
 
+    // The machine caller's own lease goes first, so it can't block its own release.
     if let Some(lease_id) = &options.remove_lease_id {
         lease::release(state, lease_id)?;
     }
@@ -198,6 +199,7 @@ fn pool_or_remove(
             clear_seed_files(&idle_path, &workspace.seeded_paths)?;
             slot.path = idle_path.clone();
             slot.status = WorkspaceStatus::Idle;
+            // Recorded as Reuse from its own path: the next opener finds these caches in place.
             slot.environment = Some(EnvironmentSnapshot {
                 source: Some(idle_path),
                 clone_mode: Some(CloneMode::Reuse),
@@ -208,6 +210,7 @@ fn pool_or_remove(
                 *existing = slot;
             }
         }
+        // No slot to return to, or not worth keeping: the branch survives, the directory does not.
         None => {
             remove_worktree(repository, &workspace.path, false)?;
             state
@@ -235,6 +238,7 @@ fn restore_workspace(
             move_worktree(repository, moved_to, &workspace.path)?;
         }
     }
+    // If even the move-back failed, rebuild the worktree from scratch at the same commit.
     if !workspace.path.exists() {
         create_detached_worktree(repository, &workspace.path, &workspace.target.oid)?;
     }

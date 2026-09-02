@@ -38,6 +38,7 @@ fn find_linux_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> 
     let mut ignored: BTreeSet<u32> = ignored_pids.iter().copied().collect();
     ignored.insert(std::process::id());
     let mut result = Vec::new();
+    // No /proc (a container without it) means no evidence, not a failure.
     let Ok(entries) = fs::read_dir("/proc") else {
         return result;
     };
@@ -91,6 +92,7 @@ fn find_macos_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> 
             ..RunOptions::default()
         },
     );
+    // lsof missing or failing means no evidence; refusing here would block every `done`.
     let Ok(result) = result else {
         return Vec::new();
     };

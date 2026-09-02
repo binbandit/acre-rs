@@ -78,6 +78,7 @@ pub fn assess_workspace(
         // Ignored data that was there at activation is ours; only new arrivals are unknown.
         .filter(|entry| !baseline.contains(entry.as_str()))
         .collect::<Vec<_>>();
+    // An edited .env means the user put something there that no other copy has.
     let changed_seed_files = changed_seed_files(&workspace.path, &workspace.baseline_seed_files)?;
     let leases = state
         .leases
@@ -90,6 +91,7 @@ pub fn assess_workspace(
         })
         .cloned()
         .collect::<Vec<_>>();
+    // Opt-out only: a shell or editor sitting in the directory is the commonest reason a return goes wrong.
     let processes = if config.safety.detect_processes {
         find_processes_using_path(&workspace.path, &options.ignored_pids)
     } else {
@@ -99,6 +101,7 @@ pub fn assess_workspace(
     let lock_reason = registered
         .filter(|worktree| worktree.locked)
         .and_then(|worktree| worktree.lock_reason.clone());
+    // Every reason is reported, not just the first, so the user fixes them all in one go.
     let mut reasons = Vec::new();
     if locked {
         reasons.push(match &lock_reason {
