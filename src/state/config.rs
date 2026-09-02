@@ -130,6 +130,7 @@ pub fn ensure_default_config_file() -> Result<()> {
 }
 
 pub fn set_config_value(config: &mut AcreConfig, key: &str, raw: &str) -> Result<Value> {
+    // Try JSON first so `true` and `[".env"]` parse; anything else is a plain string.
     let value = serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.to_owned()));
     match key {
         "root" => {

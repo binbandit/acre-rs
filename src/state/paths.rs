@@ -15,6 +15,7 @@ pub fn acre_root(config: &AcreConfig) -> PathBuf {
 }
 
 pub fn config_path() -> PathBuf {
+    // ACRE_CONFIG exists for tests and scripts that need a fully isolated root.
     std::env::var_os("ACRE_CONFIG")
         .map(PathBuf::from)
         .map(|path| absolute(&path))

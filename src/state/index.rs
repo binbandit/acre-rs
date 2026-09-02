@@ -27,6 +27,7 @@ pub fn remember_repository(config: &AcreConfig, repository: &Repository) -> Resu
         remote_url: repository.remote_url.clone(),
         last_seen_at: now_iso(),
     });
+    // Most recent first: release searches the index in order.
     repositories.sort_by(|left, right| right.last_seen_at.cmp(&left.last_seen_at));
     write_json(
         &repository_index_path(config),

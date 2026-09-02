@@ -27,6 +27,7 @@ pub fn load_repository_state(config: &AcreConfig, repository: &Repository) -> Re
 /// The state persisted for this repository, before reconciliation and recovery.
 pub fn stored_repository_state(config: &AcreConfig, repository: &Repository) -> Option<RepositoryState> {
     read_json::<RepositoryState>(&repository_state_path(config, repository))
+        // A corrupt state file reads as no state; recovery rebuilds what it can from git.
         .unwrap_or_default()
         .filter(|state| state.schema_version == 1 && state.repository_id == repository.id)
 }
@@ -61,6 +62,7 @@ fn reconcile_state(mut state: RepositoryState, worktrees: &[GitWorktree]) -> Rep
         .map(|worktree| (canonical_or_absolute(&worktree.path), worktree))
         .collect();
 
+    // Git is the authority: a record whose worktree is gone or prunable is broken, never silently kept.
     for workspace in &mut state.workspaces {
         let path = canonical_or_absolute(&workspace.path);
         match registered.get(&path) {
@@ -83,6 +85,7 @@ fn reconcile_state(mut state: RepositoryState, worktrees: &[GitWorktree]) -> Rep
         .map(|workspace| workspace.id.as_str())
         .collect();
     state.leases.retain(|lease| {
+        // A lease without a pid (a shell session) can't be probed, so it stays until released.
         valid.contains(lease.workspace_id.as_str()) && lease.pid.map(is_pid_alive).unwrap_or(true)
     });
     state.updated_at = now_iso();
@@ -104,6 +107,7 @@ impl RepositoryState {
             if workspace.status == WorkspaceStatus::Broken {
                 return false;
             }
+            // By number and repository, not oid: the head moves with every push, but it's the same PR.
             if let Some(pull_request) = &target.pull_request {
                 return workspace.target.pull_request.as_ref().is_some_and(|candidate| {
                     candidate.number == pull_request.number && candidate.repository == pull_request.repository
@@ -127,6 +131,7 @@ pub struct LockedRepository {
 impl LockedRepository {
     pub fn open(config: &AcreConfig, repository: &Repository) -> Result<Self> {
         let lock = RepositoryLock::acquire(&repository_lock_path(config, repository))?;
+        // Rediscover under the lock: another process may have added or pruned worktrees.
         let repository = discover_repository(&repository.top_level)?;
         let state = load_repository_state(config, &repository)?;
         Ok(Self {
@@ -160,6 +165,7 @@ fn recover_owned_worktrees(
 
     for worktree in &repository.worktrees {
         let path = canonical_or_absolute(&worktree.path);
+        // Only worktrees under Acre's own roots can be recovered; anything else is external.
         if is_inside(&slots_root(config, repository), &path) && !slot_paths.contains(&path) {
             state.slots.push(WorkspaceSlot {
                 id: path
@@ -168,6 +174,7 @@ fn recover_owned_worktrees(
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| random_short(8)),
                 path,
+                // A slot with a branch checked out is not idle: somebody bound it and we lost the record.
                 status: if worktree.detached && worktree.exists && !worktree.prunable {
                     WorkspaceStatus::Idle
                 } else {
@@ -193,6 +200,7 @@ fn recover_owned_worktrees(
                 } else {
                     WorkspaceStatus::Broken
                 },
+                // No slot to return to, so a recovered workspace is removed on done rather than pooled.
                 slot_id: None,
                 target: StoredTarget {
                     kind: if local_branch.is_some() {

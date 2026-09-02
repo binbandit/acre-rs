@@ -33,6 +33,7 @@ impl RepositoryLock {
         let token = random_id();
         let started = Instant::now();
         loop {
+            // mkdir is atomic on every filesystem we care about; it is the whole lock.
             match fs::create_dir(path) {
                 Ok(()) => {
                     let owner = LockOwner {
@@ -48,9 +49,11 @@ impl RepositoryLock {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     let owner = read_json::<LockOwner>(&path.join("owner.json"))?;
+                    // A dead owner, or no owner file five seconds after mkdir, means a crash mid-acquire.
                     let abandoned = owner.as_ref().is_some_and(|owner| !is_pid_alive(owner.pid))
                         || (owner.is_none() && lock_is_clearly_abandoned(path));
                     if abandoned {
+                        // Clear it and go round again rather than taking it directly; let mkdir settle who wins.
                         let _ = remove_path(path);
                         continue;
                     }
@@ -80,6 +83,7 @@ impl Drop for RepositoryLock {
         let owner = read_json::<LockOwner>(&self.path.join("owner.json"))
             .ok()
             .flatten();
+        // Only our own lock; if it was reclaimed from us as abandoned, the new owner keeps it.
         if owner.as_ref().is_some_and(|owner| owner.token == self.token) {
             let _ = remove_path(&self.path);
         }
@@ -100,6 +104,7 @@ pub fn is_pid_alive(pid: u32) -> bool {
             .arg("-0")
             .arg(pid.to_string())
             .status()
+            // EPERM (another user's process) also fails here, so a lock held across users reads as abandoned.
             .is_ok_and(|status| status.success())
     }
     #[cfg(windows)]
@@ -120,5 +125,6 @@ fn lock_is_clearly_abandoned(path: &Path) -> bool {
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        // Writing owner.json takes milliseconds; a bare dir older than that is a crash, not a race.
         .is_none_or(|age| age > Duration::from_secs(5))
 }

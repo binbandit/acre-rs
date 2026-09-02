@@ -30,8 +30,10 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     ensure_directory(parent)?;
     let name = path.file_name().and_then(OsStr::to_str).unwrap_or("state");
+    // Same directory as the target, so the final rename stays on one filesystem and is atomic.
     let temporary = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), random_short(8)));
     let mut options = OpenOptions::new();
+    // create_new refuses to clobber: a colliding name means another writer, not a stale file.
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
@@ -43,18 +45,21 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|error| AcreError::io(format!("could not create {}", temporary.display()), error))?;
     file.write_all(bytes)
         .map_err(|error| AcreError::io(format!("could not write {}", temporary.display()), error))?;
+    // Flush the data before the rename, or a crash could leave a complete-looking empty file.
     file.sync_all()
         .map_err(|error| AcreError::io(format!("could not sync {}", temporary.display()), error))?;
     drop(file);
 
     #[cfg(windows)]
     if path.exists() {
+        // Windows won't rename over an existing file.
         let _ = fs::remove_file(path);
     }
 
     fs::rename(&temporary, path)
         .map_err(|error| AcreError::io(format!("could not replace {}", path.display()), error))?;
 
+    // Sync the directory too, so the rename itself survives a power cut.
     #[cfg(unix)]
     if let Ok(directory) = fs::File::open(parent) {
         let _ = directory.sync_all();

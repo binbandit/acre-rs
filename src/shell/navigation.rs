@@ -28,6 +28,7 @@ pub fn navigation_destination(
     if relative.as_os_str().is_empty() {
         return target_root.to_path_buf();
     }
+    // Same relative spot in the new worktree, when it exists there.
     let candidate = target_root.join(relative);
     if candidate.is_dir() {
         candidate
@@ -60,6 +61,7 @@ pub fn navigate_direct(
         "<green>→</green> <bold><blue>{}</blue></bold>",
         renderer.value(label)
     ));
+    // Only spell out the path when the label alone doesn't say where we went.
     if destination.file_name().and_then(|value| value.to_str()) != Some(label) {
         renderer.line(format!(
             "<dim>{}</dim>",

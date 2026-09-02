@@ -32,6 +32,7 @@ fn write_directive(context: &CommandContext, action: &str, target: &Path, token:
         token.unwrap_or("").as_bytes(),
     ] {
         bytes.extend_from_slice(value);
+        // NUL-separated so a path with a newline or space survives the round trip.
         bytes.push(0);
     }
     fs::write(path, bytes)
@@ -39,6 +40,7 @@ fn write_directive(context: &CommandContext, action: &str, target: &Path, token:
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        // It sits in a shared temp dir; nobody else needs to read where the shell is going.
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
     Ok(())
