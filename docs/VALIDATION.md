@@ -13,7 +13,7 @@ cargo build --release
 ## What the tests cover
 
 - Unit tests sit next to the code: ref, status, and worktree parsing; markup; fingerprint normalisation; cache-root classification against a real Git repository.
-- `tests/recovery.rs` drives the built binary through throwaway repositories: opening and returning workspaces, nested cache roots, recovery after lost state, repair accounting, and CLI flag ordering.
+- `tests/end_to_end.rs` drives the built binary through throwaway repositories: opening and returning workspaces, nested cache roots, recovery after lost state, repair accounting, and CLI flag ordering.
 
 ## What is exercised by hand
 

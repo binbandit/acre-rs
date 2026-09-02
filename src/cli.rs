@@ -1,5 +1,6 @@
 //! The command-line surface: clap definitions, the per-invocation context, and dispatch to handlers.
 
+use crate::util::canonical_or_absolute;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -227,7 +228,7 @@ pub fn run() -> i32 {
             .exit();
     }
     let cwd = match &cli.directory {
-        Some(directory) => crate::util::canonical_or_absolute(directory),
+        Some(directory) => canonical_or_absolute(directory),
         None => match std::env::current_dir() {
             Ok(cwd) => cwd,
             Err(error) => {

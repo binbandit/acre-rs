@@ -131,7 +131,7 @@ if test -z "$ACRE_SHELL_SESSION_ID"; and test -n "$__acre_executable"
   set -gx ACRE_SHELL_SESSION_ID (command $__acre_executable __session-id 2>/dev/null)
 end
 function acre --description 'Warm, reusable Git workspaces'
-  set -l file (mktemp /tmp/acre-directive.XXXXXX)
+  set -l file (mktemp (test -n "$TMPDIR"; and echo $TMPDIR; or echo /tmp)/acre-directive.XXXXXX)
   or return 3
   env ACRE_DIRECTIVE_FILE=$file ACRE_SHELL_SESSION_ID=$ACRE_SHELL_SESSION_ID ACRE_SHELL_PID=$fish_pid $__acre_executable $argv
   set -l code $status
