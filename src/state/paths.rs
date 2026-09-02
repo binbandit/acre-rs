@@ -1,6 +1,9 @@
+//! Where every persisted file lives under the Acre root.
+
 use std::path::PathBuf;
 
-use crate::model::{AcreConfig, Repository};
+use crate::git::repository::Repository;
+use crate::model::AcreConfig;
 use crate::util::{absolute, home_dir, repository_slug};
 
 pub fn default_acre_root() -> PathBuf {

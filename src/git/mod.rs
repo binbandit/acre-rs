@@ -1,3 +1,5 @@
+//! The only module that runs Git: discovery, porcelain parsing, and mutations.
+
 pub mod content;
 pub mod operations;
 pub mod refs;

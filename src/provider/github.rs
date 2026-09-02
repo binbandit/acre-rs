@@ -1,11 +1,14 @@
+//! Pull request resolution through the `gh` CLI.
+
 use serde::Deserialize;
 
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::fetch_ref;
 use crate::git::refs::resolve_oid;
+use crate::git::repository::Repository;
 use crate::git::runner::{RunOptions, run_process};
-use crate::model::{PullRequestTarget, Repository};
-use crate::util::parse_hosted_remote;
+use crate::model::PullRequestTarget;
+use crate::provider::remote::parse_hosted_remote;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

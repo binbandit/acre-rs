@@ -1,3 +1,5 @@
+//! The environment plan: detected ecosystems, cache roots, seed files, and the generation fingerprint.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 
@@ -6,9 +8,20 @@ use serde_json::{Map, Value, json};
 use crate::environment::definitions::{ALL_FINGERPRINT_FILES, detect_ecosystems};
 use crate::error::Result;
 use crate::git::content::read_files_at_ref;
-use crate::model::{AcreConfig, EnvironmentPlan, Repository};
+use crate::git::repository::Repository;
+use crate::model::AcreConfig;
 use crate::state::config::load_repo_config;
 use crate::util::{sha256, unique_paths};
+
+#[derive(Debug, Clone)]
+pub struct EnvironmentPlan {
+    pub fingerprint: String,
+    pub ecosystem_ids: Vec<String>,
+    pub cache_roots: Vec<String>,
+    pub required_roots: Vec<String>,
+    pub seed_files: Vec<String>,
+    pub platform_key: String,
+}
 
 pub fn build_environment_plan(
     repository: &Repository,

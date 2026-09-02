@@ -1,12 +1,16 @@
+//! Reuses prepared caches: clones approved cache roots between worktrees, ideally as reflinks.
+
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::environment::fingerprint::EnvironmentPlan;
 use crate::environment::inspect::inspect_environment;
 use crate::environment::roots::inspect_ignored;
+use crate::environment::seed::seed_files_only;
 use crate::error::{AcreError, Result};
-use crate::git::runner::{RunOptions, run_git_with, run_process};
-use crate::model::{CloneMode, EnvironmentPlan, EnvironmentSnapshot, TrustLevel};
+use crate::git::runner::{RunOptions, run_process};
+use crate::model::{CloneMode, EnvironmentSnapshot, TrustLevel};
 use crate::util::{ensure_directory, remove_path};
 
 #[derive(Debug, Clone)]
@@ -62,35 +66,6 @@ pub fn seed_environment(
     })
 }
 
-pub fn seed_files_only(
-    source_root: &Path,
-    destination_root: &Path,
-    files: &[String],
-    trust: TrustLevel,
-) -> Result<Vec<String>> {
-    if trust != TrustLevel::Trusted {
-        return Ok(Vec::new());
-    }
-    let mut seeded = Vec::new();
-    for relative in files {
-        let source = source_root.join(relative);
-        let destination = destination_root.join(relative);
-        if !source.exists() || destination.exists() || !is_ignored_seed(source_root, relative)? {
-            continue;
-        }
-        if let Some(parent) = destination.parent() {
-            ensure_directory(parent)?;
-        }
-        match copy_seed_path(&source, &destination) {
-            Ok(()) => seeded.push(relative.clone()),
-            Err(_) => {
-                let _ = remove_path(&destination);
-            }
-        }
-    }
-    Ok(seeded)
-}
-
 pub fn clear_cache_roots(root: &Path, cache_roots: &[String]) -> Result<()> {
     for relative in inspect_ignored(root, cache_roots)?.cache_roots {
         remove_path(&root.join(relative))?;
@@ -98,27 +73,8 @@ pub fn clear_cache_roots(root: &Path, cache_roots: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub fn clear_seed_files(root: &Path, files: &[String]) -> Result<()> {
-    for relative in files {
-        remove_path(&root.join(relative))?;
-    }
-    Ok(())
-}
-
-fn is_ignored_seed(source_root: &Path, relative: &str) -> Result<bool> {
-    let result = run_git_with(
-        source_root,
-        &["check-ignore", "--quiet", "--", relative],
-        RunOptions {
-            timeout: Some(Duration::from_secs(10)),
-            accepted_statuses: &[0, 1, 128],
-            ..RunOptions::default()
-        },
-    )?;
-    Ok(result.status == 0)
-}
-
-fn copy_seed_path(source: &Path, destination: &Path) -> Result<()> {
+/// Copies one path of any kind (file, directory, or symlink) preserving its type and permissions.
+pub fn copy_path(source: &Path, destination: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(source)
         .map_err(|error| AcreError::io(format!("could not inspect {}", source.display()), error))?;
     if metadata.file_type().is_symlink() {

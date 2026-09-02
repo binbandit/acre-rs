@@ -1,3 +1,5 @@
+//! The per-repository lock: an exclusive directory with an owner token, reclaimed only from dead processes.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -6,7 +8,8 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AcreError, Result, exit};
-use crate::util::{ensure_directory, now_iso, random_id, read_json, remove_path, write_json};
+use crate::state::storage::{read_json, write_json};
+use crate::util::{ensure_directory, now_iso, random_id, remove_path};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

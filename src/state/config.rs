@@ -1,3 +1,5 @@
+//! User configuration: defaults, loading with overrides, validation, and `acre config set`.
+
 use std::path::Path;
 
 use serde_json::Value;
@@ -5,7 +7,8 @@ use serde_json::Value;
 use crate::error::{AcreError, Result, exit};
 use crate::model::{AcreConfig, EnvironmentConfig, PoolConfig, RepoConfig, SafetyConfig};
 use crate::state::paths::{config_path, default_acre_root};
-use crate::util::{read_json, validate_relative_path, write_json};
+use crate::state::storage::{read_json, write_json};
+use crate::util::validate_relative_path;
 
 pub fn default_config() -> AcreConfig {
     AcreConfig {

@@ -1,17 +1,19 @@
+//! Per-repository state: loading reconciled against Git, recovery of orphaned worktrees, locked access.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
-use crate::git::repository::discover_repository;
+use crate::git::repository::{Repository, discover_repository};
+use crate::git::worktrees::GitWorktree;
 use crate::model::{
-    AcreConfig, GitWorktree, Repository, RepositoryState, StoredTarget, TrustLevel, WorkspaceOwnership,
-    WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
+    AcreConfig, RepositoryState, StoredTarget, TrustLevel, WorkspaceOwnership, WorkspaceRecord,
+    WorkspaceSlot, WorkspaceStatus,
 };
 use crate::state::lock::{RepositoryLock, is_pid_alive};
 use crate::state::paths::{active_root, repository_lock_path, repository_state_path, slots_root};
-use crate::util::{
-    canonical_or_absolute, is_inside, now_iso, random_short, read_json, short_hash, write_json,
-};
+use crate::state::storage::{read_json, write_json};
+use crate::util::{canonical_or_absolute, is_inside, now_iso, random_short, short_hash};
 
 pub fn load_repository_state(config: &AcreConfig, repository: &Repository) -> Result<RepositoryState> {
     let state = match stored_repository_state(config, repository) {

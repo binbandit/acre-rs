@@ -1,9 +1,62 @@
+//! Seed files are trusted local configuration such as `.env`: copied only into trusted
+//! workspaces, hashed so any edit blocks return, and scrubbed from idle slots.
+
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
+use crate::environment::clone::copy_path;
 use crate::error::{AcreError, Result};
-use crate::model::SeedFileSnapshot;
-use crate::util::sha256;
+use crate::git::runner::{RunOptions, run_git_with};
+use crate::model::{SeedFileSnapshot, TrustLevel};
+use crate::util::{ensure_directory, remove_path, sha256};
+
+pub fn seed_files_only(
+    source_root: &Path,
+    destination_root: &Path,
+    files: &[String],
+    trust: TrustLevel,
+) -> Result<Vec<String>> {
+    if trust != TrustLevel::Trusted {
+        return Ok(Vec::new());
+    }
+    let mut seeded = Vec::new();
+    for relative in files {
+        let source = source_root.join(relative);
+        let destination = destination_root.join(relative);
+        if !source.exists() || destination.exists() || !is_ignored_seed(source_root, relative)? {
+            continue;
+        }
+        if let Some(parent) = destination.parent() {
+            ensure_directory(parent)?;
+        }
+        match copy_path(&source, &destination) {
+            Ok(()) => seeded.push(relative.clone()),
+            Err(_) => {
+                let _ = remove_path(&destination);
+            }
+        }
+    }
+    Ok(seeded)
+}
+pub fn clear_seed_files(root: &Path, files: &[String]) -> Result<()> {
+    for relative in files {
+        remove_path(&root.join(relative))?;
+    }
+    Ok(())
+}
+fn is_ignored_seed(source_root: &Path, relative: &str) -> Result<bool> {
+    let result = run_git_with(
+        source_root,
+        &["check-ignore", "--quiet", "--", relative],
+        RunOptions {
+            timeout: Some(Duration::from_secs(10)),
+            accepted_statuses: &[0, 1, 128],
+            ..RunOptions::default()
+        },
+    )?;
+    Ok(result.status == 0)
+}
 
 pub fn snapshot_seed_files(root: &Path, files: &[String]) -> Result<Vec<SeedFileSnapshot>> {
     let mut snapshots = Vec::new();

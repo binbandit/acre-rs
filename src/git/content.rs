@@ -1,3 +1,5 @@
+//! Reading files at a commit without checking them out.
+
 use std::collections::BTreeMap;
 use std::path::Path;
 

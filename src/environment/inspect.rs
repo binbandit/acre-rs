@@ -1,8 +1,11 @@
+//! Reports whether a worktree's environment is ready, warm, or cold for a plan.
+
 use std::path::Path;
 
+use crate::environment::fingerprint::EnvironmentPlan;
 use crate::environment::roots::inspect_ignored;
 use crate::error::Result;
-use crate::model::{CloneMode, EnvironmentPlan, EnvironmentSnapshot, EnvironmentState};
+use crate::model::{CloneMode, EnvironmentSnapshot, EnvironmentState};
 
 pub fn inspect_environment(root: &Path, plan: &EnvironmentPlan) -> Result<EnvironmentSnapshot> {
     let layout = inspect_ignored(root, &plan.cache_roots)?;

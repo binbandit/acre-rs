@@ -1,3 +1,6 @@
+//! Repository discovery: top level, common dir, remotes, default branch, and registered worktrees.
+
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -5,12 +8,35 @@ use std::path::{Path, PathBuf};
 use crate::error::{AcreError, Result, exit};
 use crate::git::runner::{RunOptions, run_git_with, run_process};
 use crate::git::worktrees::{
-    find_current_worktree, list_worktrees, parse_worktree_porcelain, with_existence,
+    GitWorktree, find_current_worktree, list_worktrees, parse_worktree_porcelain, with_existence,
 };
-use crate::model::{GitWorktree, Repository};
-use crate::util::{canonical_or_absolute, parse_hosted_remote, short_hash};
+use crate::provider::remote::parse_hosted_remote;
+use crate::util::{canonical_or_absolute, short_hash};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Repository {
+    pub id: String,
+    pub name: String,
+    pub top_level: PathBuf,
+    pub git_dir: PathBuf,
+    pub common_dir: PathBuf,
+    pub remote: Option<String>,
+    pub remote_url: Option<String>,
+    pub default_branch: Option<String>,
+    pub current_worktree: Option<GitWorktree>,
+    pub worktrees: Vec<GitWorktree>,
+}
 
 impl Repository {
+    /// The main worktree's directory, which holds the trusted copies of local files.
+    pub fn primary_path(&self) -> &Path {
+        self.worktrees
+            .first()
+            .map(|worktree| worktree.path.as_path())
+            .unwrap_or(self.top_level.as_path())
+    }
+
     /// The registered worktree at `path`, compared after canonicalization.
     pub fn worktree_at(&self, path: &Path) -> Option<&GitWorktree> {
         let path = canonical_or_absolute(path);

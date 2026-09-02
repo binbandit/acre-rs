@@ -1,6 +1,16 @@
+//! Built-in ecosystem knowledge: which files identify a toolchain and which directories it caches.
+
 use std::collections::BTreeMap;
 
-use crate::model::EcosystemDefinition;
+#[derive(Debug, Clone, Copy)]
+pub struct EcosystemDefinition {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub fingerprint_files: &'static [&'static str],
+    pub cache_roots: &'static [&'static str],
+    pub required_roots: &'static [&'static str],
+    pub seed_files: &'static [&'static str],
+}
 
 pub const ALL_FINGERPRINT_FILES: &[&str] = &[
     "package.json",

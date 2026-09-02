@@ -1,9 +1,13 @@
+//! The index of repositories Acre has touched, so a lease can be released from anywhere.
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::model::{AcreConfig, KnownRepository, Repository};
+use crate::git::repository::Repository;
+use crate::model::{AcreConfig, KnownRepository};
 use crate::state::paths::repository_index_path;
-use crate::util::{now_iso, read_json, write_json};
+use crate::state::storage::{read_json, write_json};
+use crate::util::now_iso;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

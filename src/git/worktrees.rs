@@ -1,9 +1,28 @@
+//! Parsing `git worktree list`.
+
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::git::runner::run_git;
-use crate::model::GitWorktree;
 use crate::util::canonical_or_absolute;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitWorktree {
+    pub path: PathBuf,
+    pub head: String,
+    pub branch: Option<String>,
+    pub branch_ref: Option<String>,
+    pub detached: bool,
+    pub bare: bool,
+    pub locked: bool,
+    pub lock_reason: Option<String>,
+    pub prunable: bool,
+    pub prune_reason: Option<String>,
+    pub is_main: bool,
+    pub exists: bool,
+}
 
 pub fn list_worktrees(cwd: &Path) -> Result<Vec<GitWorktree>> {
     let result = run_git(cwd, &["worktree", "list", "--porcelain", "-z"])?;

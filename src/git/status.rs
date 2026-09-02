@@ -1,9 +1,40 @@
+//! Working tree status and the ignored-path listing.
+
 use std::path::Path;
 
 use crate::error::Result;
 use crate::git::runner::run_git;
-use crate::model::{StatusEntry, StatusEntryKind, WorkingTreeStatus};
 use crate::util::sha256;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkingTreeStatus {
+    pub staged: usize,
+    pub modified: usize,
+    pub untracked: usize,
+    pub conflicted: usize,
+    pub entries: Vec<StatusEntry>,
+    pub dirty: bool,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusEntry {
+    pub path: String,
+    pub original_path: Option<String>,
+    pub index: String,
+    pub worktree: String,
+    pub kind: StatusEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatusEntryKind {
+    Changed,
+    Untracked,
+}
 
 pub fn read_status(cwd: &Path) -> Result<WorkingTreeStatus> {
     let result = run_git(cwd, &["status", "--porcelain=v2", "-z", "--untracked-files=all"])?;

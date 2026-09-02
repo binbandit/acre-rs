@@ -5,9 +5,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::error::{AcreError, Result, exit};
+use crate::git::repository::Repository;
 use crate::git::runner::{ProcessResult, RunOptions, decode_stdout, run_git_with};
-use crate::model::{Repository, ResolvedTarget, StoredTarget, TargetKind};
+use crate::model::{StoredTarget, TargetKind};
 use crate::util::ensure_directory;
+use crate::workspace::resolve::ResolvedTarget;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 

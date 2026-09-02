@@ -1,8 +1,28 @@
+//! Listing and resolving refs.
+
 use std::path::Path;
 
 use crate::error::Result;
 use crate::git::runner::{RunOptions, decode_stdout, run_git, run_git_with};
-use crate::model::{GitRef, GitRefKind};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRef {
+    pub full_name: String,
+    pub short_name: String,
+    pub oid: String,
+    pub kind: GitRefKind,
+    pub remote: Option<String>,
+    pub upstream: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GitRefKind {
+    Local,
+    Remote,
+}
 
 pub fn list_refs(cwd: &Path) -> Result<Vec<GitRef>> {
     let format = "%(refname)%00%(objectname)%00%(upstream)%00";
