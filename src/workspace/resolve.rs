@@ -2,7 +2,7 @@
 
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::fetch_ref;
-use crate::git::refs::{GitRefKind, list_refs, resolve_oid, validate_branch_name};
+use crate::git::refs::{GitRef, GitRefKind, list_refs, resolve_oid, validate_branch_name};
 use crate::git::repository::Repository;
 use crate::git::worktrees::GitWorktree;
 use crate::model::WorkspaceStatus;
@@ -10,7 +10,7 @@ use crate::model::{PullRequestTarget, RepositoryState, StoredTarget, TargetKind,
 use crate::provider::github::{
     ensure_pull_request_object, parse_pull_request_selector, resolve_pull_request,
 };
-use crate::util::{canonical_or_absolute, is_subsequence};
+use crate::util::is_subsequence;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -28,6 +28,29 @@ pub struct ResolvedTarget {
     pub pull_request: Option<PullRequestTarget>,
 }
 
+impl ResolvedTarget {
+    /// A target with only its identity filled in; each kind adds what it needs on top.
+    fn new(
+        kind: TargetKind,
+        display_name: impl Into<String>,
+        oid: impl Into<String>,
+        trust: TrustLevel,
+    ) -> Self {
+        Self {
+            kind,
+            display_name: display_name.into(),
+            oid: oid.into(),
+            trust,
+            existing_worktree: None,
+            local_branch: None,
+            remote_branch: None,
+            remote: None,
+            base_ref: None,
+            pull_request: None,
+        }
+    }
+}
+
 impl From<&ResolvedTarget> for StoredTarget {
     fn from(target: &ResolvedTarget) -> Self {
         Self {
@@ -41,6 +64,8 @@ impl From<&ResolvedTarget> for StoredTarget {
     }
 }
 
+/// Resolves a selector to existing work, in order: a pull request, a checked-out worktree, a
+/// local branch, a branch on exactly one remote. Anything else is an error with suggestions.
 pub fn resolve_existing_target(
     repository: &Repository,
     state: &RepositoryState,
@@ -51,74 +76,12 @@ pub fn resolve_existing_target(
 
     if typed.kind == SelectorKind::Auto {
         if let Some(number) = parse_pull_request_selector(value) {
-            if let Some(existing) = state.workspaces.iter().find(|workspace| {
-                workspace.status != WorkspaceStatus::Broken
-                    && workspace
-                        .target
-                        .pull_request
-                        .as_ref()
-                        .is_some_and(|pull_request| pull_request.number == number)
-            }) {
-                if let Some(worktree) = repository.worktree_at(&existing.path) {
-                    let mut target = from_stored(&existing.target, existing.trust);
-                    target.kind = TargetKind::Worktree;
-                    target.existing_worktree = Some(worktree.clone());
-                    return Ok(target);
-                }
-            }
-            let mut pull_request = resolve_pull_request(repository, &number.to_string())?;
-            let oid = ensure_pull_request_object(repository, &pull_request)?;
-            pull_request.head_oid = oid.clone();
-            return Ok(ResolvedTarget {
-                kind: TargetKind::PullRequest,
-                display_name: format!("PR #{} · {}", pull_request.number, pull_request.title),
-                oid,
-                trust: if pull_request.cross_repository {
-                    TrustLevel::Untrusted
-                } else {
-                    TrustLevel::Trusted
-                },
-                existing_worktree: None,
-                local_branch: None,
-                remote_branch: None,
-                remote: None,
-                base_ref: None,
-                pull_request: Some(pull_request),
-            });
+            return pull_request_target(repository, state, number);
         }
     }
-
-    let path_value = Path::new(value);
-    if let Some(worktree) = repository.worktrees.iter().find(|worktree| match typed.kind {
-        SelectorKind::Worktree => canonical_or_absolute(&worktree.path) == canonical_or_absolute(path_value),
-        SelectorKind::Remote => false,
-        _ => {
-            worktree.branch.as_deref() == Some(value)
-                || (typed.kind == SelectorKind::Auto
-                    && canonical_or_absolute(&worktree.path) == canonical_or_absolute(path_value))
-        }
-    }) {
-        let stored = state.workspace_at(&worktree.path);
-        return Ok(ResolvedTarget {
-            kind: TargetKind::Worktree,
-            display_name: worktree
-                .branch
-                .clone()
-                .or_else(|| stored.map(|workspace| workspace.target.display_name.clone()))
-                .unwrap_or_else(|| value.to_owned()),
-            oid: worktree.head.clone(),
-            trust: stored
-                .map(|workspace| workspace.trust)
-                .unwrap_or(TrustLevel::Trusted),
-            existing_worktree: Some(worktree.clone()),
-            local_branch: worktree.branch.clone(),
-            remote_branch: None,
-            remote: None,
-            base_ref: None,
-            pull_request: stored.and_then(|workspace| workspace.target.pull_request.clone()),
-        });
+    if let Some(target) = worktree_target(repository, state, &typed) {
+        return Ok(target);
     }
-
     let refs = list_refs(&repository.top_level)?;
     if typed.kind != SelectorKind::Remote {
         if let Some(local) = refs
@@ -126,86 +89,154 @@ pub fn resolve_existing_target(
             .find(|reference| reference.kind == GitRefKind::Local && reference.short_name == value)
         {
             return Ok(ResolvedTarget {
-                kind: TargetKind::LocalBranch,
-                display_name: local.short_name.clone(),
-                oid: local.oid.clone(),
-                trust: TrustLevel::Trusted,
-                existing_worktree: None,
                 local_branch: Some(local.short_name.clone()),
-                remote_branch: None,
-                remote: None,
-                base_ref: None,
-                pull_request: None,
+                ..ResolvedTarget::new(
+                    TargetKind::LocalBranch,
+                    &local.short_name,
+                    &local.oid,
+                    TrustLevel::Trusted,
+                )
             });
         }
     }
-
-    let explicit = refs.iter().find(|reference| {
-        reference.kind == GitRefKind::Remote
-            && reference
-                .remote
-                .as_ref()
-                .is_some_and(|remote| format!("{remote}/{}", reference.short_name) == value)
-    });
-    let matches: Vec<_> = if let Some(explicit) = explicit {
-        vec![explicit]
-    } else if typed.kind == SelectorKind::Worktree {
-        Vec::new()
-    } else {
-        refs.iter()
-            .filter(|reference| reference.kind == GitRefKind::Remote && reference.short_name == value)
-            .collect()
-    };
-
-    if matches.len() == 1 {
-        let remote = matches[0];
-        let remote_name = remote.remote.clone().unwrap_or_default();
-        return Ok(ResolvedTarget {
-            kind: TargetKind::RemoteBranch,
-            display_name: remote.short_name.clone(),
-            oid: remote.oid.clone(),
-            trust: TrustLevel::Trusted,
-            existing_worktree: None,
-            local_branch: Some(remote.short_name.clone()),
-            remote_branch: Some(format!("{remote_name}/{}", remote.short_name)),
-            remote: Some(remote_name),
-            base_ref: None,
-            pull_request: None,
-        });
+    if let Some(target) = remote_branch_target(&refs, &typed)? {
+        return Ok(target);
     }
-    if matches.len() > 1 {
-        return Err(AcreError::new(
+    Err(not_found(repository, &refs, selector, value))
+}
+
+/// The workspace already holding this pull request, or its head fetched fresh.
+fn pull_request_target(
+    repository: &Repository,
+    state: &RepositoryState,
+    number: u64,
+) -> Result<ResolvedTarget> {
+    let held = state.workspaces.iter().find(|workspace| {
+        workspace.status != WorkspaceStatus::Broken
+            && workspace
+                .target
+                .pull_request
+                .as_ref()
+                .is_some_and(|pull_request| pull_request.number == number)
+    });
+    if let Some(existing) = held {
+        if let Some(worktree) = repository.worktree_at(&existing.path) {
+            return Ok(ResolvedTarget {
+                kind: TargetKind::Worktree,
+                existing_worktree: Some(worktree.clone()),
+                ..from_stored(&existing.target, existing.trust)
+            });
+        }
+    }
+    let mut pull_request = resolve_pull_request(repository, &number.to_string())?;
+    let oid = ensure_pull_request_object(repository, &pull_request)?;
+    pull_request.head_oid = oid.clone();
+    let trust = if pull_request.cross_repository {
+        TrustLevel::Untrusted
+    } else {
+        TrustLevel::Trusted
+    };
+    let display_name = format!("PR #{} · {}", pull_request.number, pull_request.title);
+    Ok(ResolvedTarget {
+        pull_request: Some(pull_request),
+        ..ResolvedTarget::new(TargetKind::PullRequest, display_name, oid, trust)
+    })
+}
+
+/// A worktree already checked out, found by branch name or by path depending on the selector.
+fn worktree_target(
+    repository: &Repository,
+    state: &RepositoryState,
+    typed: &TypedSelector,
+) -> Option<ResolvedTarget> {
+    let value = typed.value.as_str();
+    let by_path = || repository.worktree_at(Path::new(value));
+    let by_branch = || {
+        repository
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.branch.as_deref() == Some(value))
+    };
+    let worktree = match typed.kind {
+        SelectorKind::Worktree => by_path(),
+        SelectorKind::Branch => by_branch(),
+        SelectorKind::Auto => by_branch().or_else(by_path),
+        SelectorKind::Remote => None,
+    }?;
+    let stored = state.workspace_at(&worktree.path);
+    let display_name = worktree
+        .branch
+        .clone()
+        .or_else(|| stored.map(|workspace| workspace.target.display_name.clone()))
+        .unwrap_or_else(|| value.to_owned());
+    let trust = stored.map_or(TrustLevel::Trusted, |workspace| workspace.trust);
+    Some(ResolvedTarget {
+        existing_worktree: Some(worktree.clone()),
+        local_branch: worktree.branch.clone(),
+        pull_request: stored.and_then(|workspace| workspace.target.pull_request.clone()),
+        ..ResolvedTarget::new(TargetKind::Worktree, display_name, &worktree.head, trust)
+    })
+}
+
+/// A branch on exactly one remote, named either `remote/branch` or just `branch`.
+fn remote_branch_target(refs: &[GitRef], typed: &TypedSelector) -> Result<Option<ResolvedTarget>> {
+    let value = typed.value.as_str();
+    let remotes = || {
+        refs.iter()
+            .filter(|reference| reference.kind == GitRefKind::Remote)
+    };
+    let matches: Vec<&GitRef> = match remotes().find(|reference| reference.qualified_name() == value) {
+        Some(explicit) => vec![explicit],
+        None if typed.kind == SelectorKind::Worktree => Vec::new(),
+        None => remotes()
+            .filter(|reference| reference.short_name == value)
+            .collect(),
+    };
+    match matches.as_slice() {
+        [] => Ok(None),
+        [remote] => {
+            let remote_name = remote.remote.clone().unwrap_or_default();
+            Ok(Some(ResolvedTarget {
+                local_branch: Some(remote.short_name.clone()),
+                remote_branch: Some(remote.qualified_name()),
+                remote: Some(remote_name),
+                ..ResolvedTarget::new(
+                    TargetKind::RemoteBranch,
+                    &remote.short_name,
+                    &remote.oid,
+                    TrustLevel::Trusted,
+                )
+            }))
+        }
+        _ => Err(AcreError::new(
             "ACRE_TARGET_AMBIGUOUS",
             format!("{value} exists on more than one remote."),
             exit::CONFLICT,
         )
         .with_details(serde_json::json!({
-            "matches": matches.iter().map(|reference| format!("{}/{}", reference.remote.as_deref().unwrap_or(""), reference.short_name)).collect::<Vec<_>>()
-        })));
+            "matches": matches.iter().map(|reference| reference.qualified_name()).collect::<Vec<_>>()
+        }))),
     }
+}
 
-    let candidates: BTreeSet<String> = repository
+fn not_found(repository: &Repository, refs: &[GitRef], selector: &str, value: &str) -> AcreError {
+    let candidates: Vec<String> = repository
         .worktrees
         .iter()
         .filter_map(|worktree| worktree.branch.clone())
-        .chain(refs.iter().map(|reference| match reference.kind {
-            GitRefKind::Local => reference.short_name.clone(),
-            GitRefKind::Remote => format!(
-                "{}/{}",
-                reference.remote.as_deref().unwrap_or(""),
-                reference.short_name
-            ),
-        }))
+        .chain(refs.iter().map(GitRef::qualified_name))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect();
-    Err(AcreError::new(
+    AcreError::new(
         "ACRE_TARGET_NOT_FOUND",
         format!("No existing work is named {selector}."),
         exit::NOT_FOUND,
     )
     .with_details(serde_json::json!({
         "selector": selector,
-        "suggestions": closest(value, candidates.into_iter().collect::<Vec<_>>().as_slice())
-    })))
+        "suggestions": closest(value, &candidates),
+    }))
 }
 
 pub fn resolve_new_target(
@@ -287,34 +318,22 @@ pub fn resolve_new_target(
         .with_details(serde_json::json!({ "baseRef": base_ref }))
     })?;
     Ok(ResolvedTarget {
-        kind: TargetKind::NewBranch,
-        display_name: branch.to_owned(),
-        oid,
-        trust: TrustLevel::Trusted,
-        existing_worktree: None,
         local_branch: Some(branch.to_owned()),
-        remote_branch: None,
-        remote: None,
         base_ref: Some(base_ref),
-        pull_request: None,
+        ..ResolvedTarget::new(TargetKind::NewBranch, branch, oid, TrustLevel::Trusted)
     })
 }
 
 fn from_stored(target: &StoredTarget, trust: TrustLevel) -> ResolvedTarget {
     ResolvedTarget {
-        kind: target.kind,
-        display_name: target.display_name.clone(),
-        oid: target.oid.clone(),
-        trust,
-        existing_worktree: None,
         local_branch: target.local_branch.clone(),
         remote_branch: target.remote_branch.clone(),
         remote: target
             .remote_branch
             .as_ref()
             .and_then(|value| value.split_once('/').map(|(remote, _)| remote.to_owned())),
-        base_ref: None,
         pull_request: target.pull_request.clone(),
+        ..ResolvedTarget::new(target.kind, &target.display_name, &target.oid, trust)
     }
 }
 

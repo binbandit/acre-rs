@@ -10,7 +10,7 @@ use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
 use crate::workspace::lease::LeaseRequest;
 use crate::workspace::resolve::resolve_new_target;
 
-pub fn command_new(
+pub fn run(
     context: &CommandContext,
     branch: &str,
     from: Option<&str>,

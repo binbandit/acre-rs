@@ -21,7 +21,7 @@ use crate::workspace::lease::release_shell_session_lease;
 use crate::workspace::release::{ReturnOptions, return_workspace};
 use crate::workspace::resolve::resolve_existing_target;
 
-pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
+pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let state = load_repository_state(&config, &repository)?;
@@ -191,7 +191,7 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
     Ok(exit::RESUME)
 }
 
-pub fn command_resume_done(context: &CommandContext, token: &str) -> Result<i32> {
+pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
     let config = load_config()?;
     let operation = read_pending_done(&config, token)?.ok_or_else(|| {
         AcreError::new(

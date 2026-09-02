@@ -34,12 +34,23 @@ pub struct CommandContext {
     pub shell: ShellBridge,
 }
 
+const AFTER_HELP: &str = "\
+Daily use:
+  acre                  choose existing work
+  acre <target>         open an existing worktree, branch, remote branch, or PR
+  acre new <branch>     create a branch in a warm workspace
+  acre -                return to the previous exact location
+  acre done             finish with the current workspace
+  acre <target> -- CMD  run a command in an existing target
+
+Acre never runs repository setup scripts automatically and never recycles dirty or unverified work.";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "acre",
     version = crate::VERSION,
     about = "Warm, reusable Git workspaces. Every branch, already ready.",
-    after_help = "Daily use:\n  acre                  choose existing work\n  acre <target>         open an existing worktree, branch, remote branch, or PR\n  acre new <branch>     create a branch in a warm workspace\n  acre -                return to the previous exact location\n  acre done             finish with the current workspace\n  acre <target> -- CMD  run a command in an existing target\n\nAcre never runs repository setup scripts automatically and never recycles dirty or unverified work."
+    after_help = AFTER_HELP,
 )]
 struct Cli {
     #[arg(short = 'C', long, global = true, value_name = "PATH")]
@@ -247,13 +258,13 @@ pub fn run() -> i32 {
 
 fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
     match cli.command {
-        None => commands::open::command_open(context, cli.target.as_deref(), &cli.program),
+        None => commands::open::run(context, cli.target.as_deref(), &cli.program),
         Some(Command::New(args)) => {
-            commands::new::command_new(context, &args.branch, args.from.as_deref(), args.fresh, args.stay)
+            commands::new::run(context, &args.branch, args.from.as_deref(), args.fresh, args.stay)
         }
-        Some(Command::Done(args)) => commands::done::command_done(context, args.target.as_deref()),
-        Some(Command::Setup(args)) => commands::setup::command_setup(context, args.shell, args.yes),
-        Some(Command::Acquire(args)) => commands::machine::command_acquire(
+        Some(Command::Done(args)) => commands::done::run(context, args.target.as_deref()),
+        Some(Command::Setup(args)) => commands::setup::run(context, args.shell, args.yes),
+        Some(Command::Acquire(args)) => commands::machine::acquire(
             context,
             &args.target,
             &args.holder,
@@ -262,33 +273,31 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
             args.from.as_deref(),
             args.fresh,
         ),
-        Some(Command::Release(args)) => {
-            commands::machine::command_release(context, &args.lease_id, args.keep_active)
-        }
+        Some(Command::Release(args)) => commands::machine::release(context, &args.lease_id, args.keep_active),
         Some(Command::System(args)) => match args.command {
-            SystemCommand::Warm { slots } => commands::system::command_system_warm(context, slots),
-            SystemCommand::Inspect => commands::system::command_system_inspect(context),
-            SystemCommand::Doctor => commands::system::command_system_doctor(context),
-            SystemCommand::Repair => commands::system::command_system_repair(context),
-            SystemCommand::Gc => commands::system::command_system_gc(context),
+            SystemCommand::Warm { slots } => commands::system::warm(context, slots),
+            SystemCommand::Inspect => commands::system::inspect(context),
+            SystemCommand::Doctor => commands::system::doctor(context),
+            SystemCommand::Repair => commands::system::repair(context),
+            SystemCommand::Gc => commands::system::gc(context),
         },
         Some(Command::Config(args)) => match args.command.unwrap_or(ConfigCommand::Show) {
-            ConfigCommand::Show => commands::config::command_config_show(context),
-            ConfigCommand::Path => commands::config::command_config_path(context),
-            ConfigCommand::Init { force } => commands::config::command_config_init(context, force),
-            ConfigCommand::Set { key, value } => commands::config::command_config_set(context, &key, &value),
-            ConfigCommand::Edit => commands::config::command_config_edit(context),
-            ConfigCommand::RepoInit { force } => commands::config::command_repo_config_init(context, force),
+            ConfigCommand::Show => commands::config::show(context),
+            ConfigCommand::Path => commands::config::path(context),
+            ConfigCommand::Init { force } => commands::config::init(context, force),
+            ConfigCommand::Set { key, value } => commands::config::set(context, &key, &value),
+            ConfigCommand::Edit => commands::config::edit(context),
+            ConfigCommand::RepoInit { force } => commands::config::repo_init(context, force),
         },
         Some(Command::Shell(args)) => match args.command {
-            ShellCommand::Init { shell } => commands::shell::command_shell_init(context, shell),
+            ShellCommand::Init { shell } => commands::shell::init(context, shell),
         },
-        Some(Command::Completion(args)) => commands::shell::command_completion(context, args.shell),
-        Some(Command::SessionId) => commands::internal::command_session_id(context),
-        Some(Command::Resume { token }) => commands::internal::command_resume(context, &token),
-        Some(Command::Replenish { common_dir }) => commands::internal::command_replenish(&common_dir),
+        Some(Command::Completion(args)) => commands::shell::completion(context, args.shell),
+        Some(Command::SessionId) => commands::internal::session_id(context),
+        Some(Command::Resume { token }) => commands::internal::resume(context, &token),
+        Some(Command::Replenish { common_dir }) => commands::internal::replenish(&common_dir),
         Some(Command::Complete { token }) => {
-            commands::internal::command_complete(context, token.as_deref().unwrap_or(""))
+            commands::internal::complete(context, token.as_deref().unwrap_or(""))
         }
     }
 }

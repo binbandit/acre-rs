@@ -14,7 +14,7 @@ use crate::workspace::lease::{LeaseRequest, release_workspace_lease};
 use crate::workspace::release::{ReturnOptions, return_workspace};
 use crate::workspace::resolve::{resolve_existing_target, resolve_new_target};
 
-pub fn command_acquire(
+pub fn acquire(
     context: &CommandContext,
     selector: &str,
     holder: &str,
@@ -62,7 +62,7 @@ pub fn command_acquire(
     } else {
         renderer.raw(format!("{}\n", result.path.display()));
         renderer.error(format!(
-            "<dim>lease {} · {:?}</dim>",
+            "<dim>lease {} · {}</dim>",
             renderer.value(
                 result
                     .lease
@@ -81,7 +81,7 @@ pub fn command_acquire(
     Ok(exit::SUCCESS)
 }
 
-pub fn command_release(context: &CommandContext, lease_id: &str, keep_active: bool) -> Result<i32> {
+pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> Result<i32> {
     let config = load_config()?;
     for known in load_repository_index(&config)? {
         let Ok(repository) = discover_repository_from_common_dir(&known.common_dir) else {

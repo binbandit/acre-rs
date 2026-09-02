@@ -3,6 +3,7 @@
 //! Types that only live in memory sit next to the code that produces them.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -256,4 +257,24 @@ pub struct RepoEnvironmentConfig {
 pub struct SafetyConfig {
     pub detect_processes: bool,
     pub block_unknown_ignored_files: bool,
+}
+
+impl fmt::Display for EnvironmentState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Ready => "ready",
+            Self::Warm => "warm",
+            Self::Cold => "cold",
+            Self::Unknown => "unknown",
+        })
+    }
+}
+
+impl fmt::Display for WorkspaceOwnership {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Acre => "acre",
+            Self::External => "external",
+        })
+    }
 }

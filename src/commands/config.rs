@@ -10,7 +10,7 @@ use crate::state::config::{load_config, save_config, set_config_value, write_def
 use crate::state::paths::config_path;
 use crate::ui::output::Renderer;
 
-pub fn command_config_show(context: &CommandContext) -> Result<i32> {
+pub fn show(context: &CommandContext) -> Result<i32> {
     let config = load_config()?;
     let renderer = Renderer::new(context);
     if context.global.json {
@@ -21,12 +21,12 @@ pub fn command_config_show(context: &CommandContext) -> Result<i32> {
     Ok(exit::SUCCESS)
 }
 
-pub fn command_config_path(context: &CommandContext) -> Result<i32> {
+pub fn path(context: &CommandContext) -> Result<i32> {
     Renderer::new(context).raw(format!("{}\n", config_path().display()));
     Ok(exit::SUCCESS)
 }
 
-pub fn command_config_init(context: &CommandContext, force: bool) -> Result<i32> {
+pub fn init(context: &CommandContext, force: bool) -> Result<i32> {
     let target = config_path();
     if !force && target.exists() {
         return Err(AcreError::new(
@@ -41,7 +41,7 @@ pub fn command_config_init(context: &CommandContext, force: bool) -> Result<i32>
     Ok(exit::SUCCESS)
 }
 
-pub fn command_config_set(context: &CommandContext, key: &str, value: &str) -> Result<i32> {
+pub fn set(context: &CommandContext, key: &str, value: &str) -> Result<i32> {
     let mut config = load_config()?;
     let parsed = set_config_value(&mut config, key, value)?;
     save_config(&config)?;
@@ -54,7 +54,7 @@ pub fn command_config_set(context: &CommandContext, key: &str, value: &str) -> R
     Ok(exit::SUCCESS)
 }
 
-pub fn command_config_edit(_context: &CommandContext) -> Result<i32> {
+pub fn edit(_context: &CommandContext) -> Result<i32> {
     let target = config_path();
     if !target.exists() {
         save_config(&AcreConfig::default())?;
@@ -84,7 +84,7 @@ pub fn command_config_edit(_context: &CommandContext) -> Result<i32> {
     Ok(status.code().unwrap_or(exit::INTERNAL))
 }
 
-pub fn command_repo_config_init(context: &CommandContext, force: bool) -> Result<i32> {
+pub fn repo_init(context: &CommandContext, force: bool) -> Result<i32> {
     let repository = discover_repository(&context.cwd)?;
     let target = repository.top_level.join(".acre.json");
     if !force && target.exists() {

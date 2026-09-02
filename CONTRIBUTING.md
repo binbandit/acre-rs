@@ -17,3 +17,6 @@ Rules:
 - Do not mutate worktrees Acre does not own.
 - Retain state when safety cannot be proven.
 - Prefer direct structs and functions over generic service abstractions.
+- Every source file opens with a `//!` line saying what it is for; keep it true when the file changes.
+- Types live beside the code that produces them; `model.rs` holds only what is written to disk.
+- Avoid lifetimes on structs and closures that outlive their scope; pass plain values.

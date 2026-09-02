@@ -21,11 +21,7 @@ use crate::workspace::lease::{
 };
 use crate::workspace::resolve::resolve_existing_target;
 
-pub fn command_open(
-    context: &CommandContext,
-    selector: Option<&str>,
-    child_argv: &[OsString],
-) -> Result<i32> {
+pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsString]) -> Result<i32> {
     let config = load_config()?;
     if selector == Some("-") {
         if !child_argv.is_empty() {
@@ -175,7 +171,7 @@ fn picker_rows(repository: &Repository, state: &RepositoryState) -> Result<Vec<P
             reference,
             &reference.short_name,
             &format!("{remote} · remote branch"),
-            Some(format!("{remote}/{}", reference.short_name)),
+            Some(reference.qualified_name()),
         ));
     }
     Ok(rows)

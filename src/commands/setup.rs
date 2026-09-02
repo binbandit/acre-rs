@@ -15,7 +15,7 @@ use crate::util::{ensure_directory, home_dir};
 const START: &str = "# >>> acre >>>";
 const END: &str = "# <<< acre <<<";
 
-pub fn command_setup(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -> Result<i32> {
+pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -> Result<i32> {
     let renderer = Renderer::new(context);
     let shell = shell.unwrap_or_else(detect_shell);
     let rc = shell_config_path(shell);
@@ -58,7 +58,7 @@ pub fn command_setup(context: &CommandContext, shell: Option<SupportedShell>, ye
     } else {
         renderer.line("<bold>Acre setup</bold>");
         renderer.line("");
-        renderer.line(format!("  Shell       <blue>{:?}</blue>", shell));
+        renderer.line(format!("  Shell       <blue>{}</blue>", shell));
         renderer.line(format!(
             "  Config      <dim>{}</dim>",
             renderer.value(config_path().display().to_string())
@@ -139,4 +139,24 @@ fn install_block(current: &str, desired: &str) -> String {
         "\n"
     };
     format!("{current}{separator}{desired}\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_block_appends_once_and_replaces_in_place() {
+        let block = format!("{START}\nnew\n{END}");
+        assert_eq!(install_block("", &block), format!("{block}\n"));
+        assert_eq!(
+            install_block("export A=1", &block),
+            format!("export A=1\n{block}\n")
+        );
+        let existing = format!("before\n{START}\nold\n{END}\nafter\n");
+        assert_eq!(
+            install_block(&existing, &block),
+            format!("before\n{block}\nafter\n")
+        );
+    }
 }

@@ -1,25 +1,25 @@
 //! Hidden commands used by the shell integration and the background replenisher.
 
 use crate::cli::CommandContext;
-use crate::commands::done::command_resume_done;
+use crate::commands::done;
 use crate::error::{Result, exit};
-use crate::git::refs::{GitRefKind, list_refs};
+use crate::git::refs::list_refs;
 use crate::git::repository::{discover_repository, discover_repository_from_common_dir};
 use crate::state::config::load_config;
 use crate::state::shell::new_shell_session_id;
 use crate::ui::output::Renderer;
 use crate::workspace::pool::warm_repository;
 
-pub fn command_session_id(context: &CommandContext) -> Result<i32> {
+pub fn session_id(context: &CommandContext) -> Result<i32> {
     Renderer::new(context).raw(format!("{}\n", new_shell_session_id()));
     Ok(exit::SUCCESS)
 }
 
-pub fn command_resume(context: &CommandContext, token: &str) -> Result<i32> {
-    command_resume_done(context, token)
+pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
+    done::resume(context, token)
 }
 
-pub fn command_replenish(common_dir: &std::path::Path) -> Result<i32> {
+pub fn replenish(common_dir: &std::path::Path) -> Result<i32> {
     let result = (|| -> Result<()> {
         let config = load_config()?;
         let repository = discover_repository_from_common_dir(common_dir)?;
@@ -32,7 +32,7 @@ pub fn command_replenish(common_dir: &std::path::Path) -> Result<i32> {
     result.map(|()| exit::SUCCESS)
 }
 
-pub fn command_complete(context: &CommandContext, token: &str) -> Result<i32> {
+pub fn complete(context: &CommandContext, token: &str) -> Result<i32> {
     let mut values = ["new", "done", "setup", "-", "pr:"]
         .into_iter()
         .map(ToOwned::to_owned)
@@ -45,14 +45,7 @@ pub fn command_complete(context: &CommandContext, token: &str) -> Result<i32> {
         }
         if let Ok(refs) = list_refs(&repository.top_level) {
             for reference in refs {
-                values.insert(match reference.kind {
-                    GitRefKind::Local => reference.short_name,
-                    GitRefKind::Remote => format!(
-                        "{}/{}",
-                        reference.remote.unwrap_or_default(),
-                        reference.short_name
-                    ),
-                });
+                values.insert(reference.qualified_name());
             }
         }
     }

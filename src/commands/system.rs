@@ -12,7 +12,7 @@ use crate::ui::output::Renderer;
 use crate::workspace::maintain::{gc_repository, repair_repository_state};
 use crate::workspace::pool::warm_repository;
 
-pub fn command_system_warm(context: &CommandContext, slots: Option<usize>) -> Result<i32> {
+pub fn warm(context: &CommandContext, slots: Option<usize>) -> Result<i32> {
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let created = warm_repository(&config, &repository, slots)?;
@@ -29,7 +29,7 @@ pub fn command_system_warm(context: &CommandContext, slots: Option<usize>) -> Re
         ));
         for slot in &created {
             renderer.line(format!(
-                "  <dim>{}</dim> · {:?}",
+                "  <dim>{}</dim> · {}",
                 renderer.value(slot.path.display().to_string()),
                 slot.environment
                     .as_ref()
@@ -41,7 +41,7 @@ pub fn command_system_warm(context: &CommandContext, slots: Option<usize>) -> Re
     Ok(exit::SUCCESS)
 }
 
-pub fn command_system_inspect(context: &CommandContext) -> Result<i32> {
+pub fn inspect(context: &CommandContext) -> Result<i32> {
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let state = load_repository_state(&config, &repository)?;
@@ -58,7 +58,7 @@ pub fn command_system_inspect(context: &CommandContext) -> Result<i32> {
     }
     for workspace in &state.workspaces {
         renderer.line(format!(
-            "  <blue>{}</blue>  {:?} · {:?}",
+            "  <blue>{}</blue>  {} · {}",
             renderer.value(&workspace.target.display_name),
             workspace.ownership,
             workspace
@@ -84,7 +84,7 @@ pub fn command_system_inspect(context: &CommandContext) -> Result<i32> {
     }
     for slot in idle {
         renderer.line(format!(
-            "  {}  {:?} · {}",
+            "  {}  {} · {}",
             slot.id,
             slot.environment
                 .as_ref()
@@ -115,7 +115,7 @@ struct DoctorCheck {
     detail: String,
 }
 
-pub fn command_system_doctor(context: &CommandContext) -> Result<i32> {
+pub fn doctor(context: &CommandContext) -> Result<i32> {
     let renderer = Renderer::new(context);
     let mut checks = Vec::new();
     match run_process("git", &["--version"], RunOptions::default()) {
@@ -212,7 +212,7 @@ pub fn command_system_doctor(context: &CommandContext) -> Result<i32> {
     Ok(if ok { exit::SUCCESS } else { exit::ENVIRONMENT })
 }
 
-pub fn command_system_repair(context: &CommandContext) -> Result<i32> {
+pub fn repair(context: &CommandContext) -> Result<i32> {
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let report = repair_repository_state(&config, &repository)?;
@@ -231,7 +231,7 @@ pub fn command_system_repair(context: &CommandContext) -> Result<i32> {
     Ok(exit::SUCCESS)
 }
 
-pub fn command_system_gc(context: &CommandContext) -> Result<i32> {
+pub fn gc(context: &CommandContext) -> Result<i32> {
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let report = gc_repository(&config, &repository)?;
