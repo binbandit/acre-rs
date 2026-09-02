@@ -48,6 +48,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
                     exit::NOT_FOUND,
                 )
             })?;
+        // Best effort on both sides: `-` should still move the shell if lease bookkeeping fails.
         if let Ok(current_repository) = discover_repository(&context.cwd) {
             let _ = release_shell_session_lease(&config, &current_repository, session_id);
         }
@@ -86,6 +87,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
         }
     };
     let target = resolve_existing_target(&repository, &state, &selector)?;
+    // A shell keeps its lease until it leaves; a one-off command releases it when it exits.
     let lease = if child_argv.is_empty() {
         LeaseRequest::for_shell(&context.shell)
     } else {
@@ -154,6 +156,7 @@ fn picker_rows(repository: &Repository, state: &RepositoryState) -> Result<Vec<P
     {
         rows.push(ref_row(reference, &reference.short_name, "local branch", None));
     }
+    // A remote branch that also exists locally is already listed; showing it twice just confuses.
     let local_names = refs
         .iter()
         .filter(|reference| reference.kind == GitRefKind::Local)
@@ -164,6 +167,7 @@ fn picker_rows(repository: &Repository, state: &RepositoryState) -> Result<Vec<P
         .filter(|reference| {
             reference.kind == GitRefKind::Remote && !local_names.contains(reference.short_name.as_str())
         })
+        // A huge remote would otherwise make the picker crawl.
         .take(1_000)
     {
         let remote = reference.remote.as_deref().unwrap_or("remote");

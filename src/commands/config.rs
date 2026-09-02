@@ -68,6 +68,7 @@ pub fn edit(_context: &CommandContext) -> Result<i32> {
                 exit::ENVIRONMENT,
             )
         })?;
+    // $EDITOR may carry flags ("code --wait"); split on unquoted whitespace.
     let mut pieces = split_command(&editor);
     let program = pieces.first().cloned().unwrap_or(editor);
     if !pieces.is_empty() {

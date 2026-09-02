@@ -26,6 +26,7 @@ pub fn replenish(common_dir: &std::path::Path) -> Result<i32> {
         warm_repository(&config, &repository, Some(config.pool.min_slots))?;
         Ok(())
     })();
+    // Detached from any terminal: a failure here has nobody to report to.
     if std::env::var_os("ACRE_BACKGROUND").is_some() {
         return Ok(exit::SUCCESS);
     }

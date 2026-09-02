@@ -106,6 +106,7 @@ pub struct RepositoryState {
     pub repository_common_dir: PathBuf,
     pub repository_name: String,
     pub updated_at: String,
+    // Remembered so a branch reopens at the same directory, and two targets never share one.
     #[serde(default)]
     pub target_paths: BTreeMap<String, PathBuf>,
     #[serde(default)]
@@ -135,10 +136,12 @@ pub struct WorkspaceRecord {
     pub path: PathBuf,
     pub ownership: WorkspaceOwnership,
     pub status: WorkspaceStatus,
+    // None for external and recovered workspaces, which are never pooled.
     pub slot_id: Option<String>,
     pub target: StoredTarget,
     pub trust: TrustLevel,
     pub environment: Option<EnvironmentSnapshot>,
+    // Ignored paths present at activation; anything beyond these blocks `done`.
     #[serde(default)]
     pub baseline_ignored: Vec<String>,
     #[serde(default)]
@@ -177,6 +180,7 @@ pub struct PendingDoneOperation {
     pub repository_common_dir: PathBuf,
     pub workspace_id: String,
     pub expected_head: String,
+    // Checked when the resumed `done` comes back: the tree must be exactly as assessed.
     pub expected_status_fingerprint: String,
     pub safe_destination: PathBuf,
     pub current_session_id: Option<String>,

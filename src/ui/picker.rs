@@ -33,6 +33,7 @@ pub fn pick<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]) -
     enable_raw_mode()
         .map_err(|error| AcreError::new("ACRE_TERMINAL", error.to_string(), exit::ENVIRONMENT))?;
     let result = picker_loop(renderer, title, rows);
+    // Raw mode must end even when the loop failed, or the terminal is left unusable.
     let _ = disable_raw_mode();
     let mut stdout = std::io::stdout();
     let _ = execute!(stdout, MoveToColumn(0), Clear(ClearType::FromCursorDown));
@@ -48,6 +49,7 @@ fn picker_loop<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]
         let event =
             read().map_err(|error| AcreError::new("ACRE_TERMINAL", error.to_string(), exit::ENVIRONMENT))?;
         let Event::Key(key) = event else { continue };
+        // Windows reports release events too; acting on both would double every keystroke.
         if key.kind != KeyEventKind::Press {
             continue;
         }
@@ -107,10 +109,12 @@ fn draw<T>(
     }
     let mut stdout = std::io::stdout();
     if *lines_drawn > 0 {
+        // Move up over our previous frame and clear it, so the picker redraws in place.
         write!(stdout, "\x1b[{}A\x1b[0J", *lines_drawn)
             .map_err(|error| AcreError::io("could not draw picker", error))?;
     }
     let mut output = vec![format!("<bold>{}</bold>", renderer.value(title)), String::new()];
+    // Keep the selection roughly centred in the 13-row window.
     let offset = selected.saturating_sub(6);
     for (index, row) in visible.iter().skip(offset).take(13).enumerate() {
         let marker = if offset + index == selected {
@@ -145,6 +149,7 @@ fn draw<T>(
         "{}",
         output
             .iter()
+            // Always a tty here (pick checked), so colour depends only on the user's flags.
             .map(|line| renderer.format(line, true))
             .collect::<Vec<_>>()
             .join("\n")

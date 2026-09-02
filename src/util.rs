@@ -20,6 +20,7 @@ pub fn age_millis(value: &str) -> u128 {
             let duration = Utc::now().signed_duration_since(time.with_timezone(&Utc));
             duration.num_milliseconds().max(0) as u128
         })
+        // An unparseable timestamp counts as brand new, which is the cautious reading.
         .unwrap_or(0)
 }
 
@@ -68,6 +69,7 @@ pub fn absolute(path: &Path) -> PathBuf {
 }
 
 pub fn canonical_or_absolute(path: &Path) -> PathBuf {
+    // Paths that don't exist yet still need a stable form for comparisons.
     fs::canonicalize(path).unwrap_or_else(|_| absolute(path))
 }
 
@@ -95,6 +97,7 @@ pub fn branch_slug(branch: &str) -> String {
     let mut output = String::with_capacity(branch.len());
     let mut last_dash = false;
     for character in branch.chars() {
+        // The Windows-forbidden set, so a slug is valid on every platform state might be synced to.
         let invalid = character.is_control()
             || matches!(character, '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*');
         let next = if invalid { '-' } else { character };
@@ -112,6 +115,7 @@ pub fn branch_slug(branch: &str) -> String {
     if output.is_empty() {
         output = "workspace".to_owned();
     }
+    // Keep directory names short but distinct: the hash of the full branch breaks ties.
     if output.chars().count() > 72 {
         let prefix: String = output.chars().take(62).collect();
         output = format!("{prefix}--{}", short_hash(branch, 8));
@@ -132,6 +136,7 @@ pub fn validate_relative_path(value: &str) -> bool {
     if value.is_empty() || value.contains('\0') || Path::new(value).is_absolute() {
         return false;
     }
+    // No escaping the repository: config paths are joined onto worktrees.
     !Path::new(value).components().any(|component| {
         matches!(
             component,
@@ -146,12 +151,14 @@ pub fn ensure_directory(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        // State may hold copies of .env; keep it private to the user.
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
     }
     Ok(())
 }
 
 pub fn remove_path(path: &Path) -> Result<()> {
+    // exists() follows symlinks; a dangling link is still ours to remove.
     if !path.exists() && fs::symlink_metadata(path).is_err() {
         return Ok(());
     }

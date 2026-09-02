@@ -54,6 +54,7 @@ impl Renderer {
     }
 
     pub fn format(&self, markup: &str, tty: bool) -> String {
+        // The caller says whether its stream is a tty; a pipe never gets escape codes.
         render_markup(markup, self.color && tty)
     }
 }

@@ -60,6 +60,7 @@ pub fn acquire(
     if context.global.json {
         renderer.json(&payload);
     } else {
+        // Path on stdout, everything else on stderr, so scripts can capture the path alone.
         renderer.raw(format!("{}\n", result.path.display()));
         renderer.error(format!(
             "<dim>lease {} · {}</dim>",
@@ -83,6 +84,7 @@ pub fn acquire(
 
 pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> Result<i32> {
     let config = load_config()?;
+    // A lease id says nothing about its repository, so search every one we've seen.
     for known in load_repository_index(&config)? {
         let Ok(repository) = discover_repository_from_common_dir(&known.common_dir) else {
             continue;
@@ -100,6 +102,7 @@ pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> R
         let mut retained = true;
         let mut pooled = false;
         let mut assessment = None;
+        // The last lease out tries to return the workspace; others just let go.
         if !keep_active && remaining == 0 {
             let result = return_workspace(
                 &config,

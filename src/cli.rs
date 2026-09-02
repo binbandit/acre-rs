@@ -71,6 +71,7 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
+    // Hyphen values so `acre -` reaches the previous-location shortcut.
     #[arg(value_name = "TARGET", allow_hyphen_values = true)]
     target: Option<String>,
 
@@ -229,6 +230,7 @@ struct CompletionArgs {
 
 pub fn run() -> i32 {
     let cli = Cli::parse();
+    // clap can't express "positional or subcommand, not both" without breaking `--json new`, so check here.
     if cli.target.is_some() && cli.command.is_some() {
         use clap::CommandFactory;
         Cli::command()
@@ -243,6 +245,7 @@ pub fn run() -> i32 {
         None => match std::env::current_dir() {
             Ok(cwd) => cwd,
             Err(error) => {
+                // A context is still needed to render the error in the user's chosen format.
                 let context = create_context(&cli, PathBuf::from("."));
                 let error = AcreError::io("could not read current directory", error);
                 return render_failure(&context, &error);
@@ -305,6 +308,7 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
 fn create_context(cli: &Cli, cwd: PathBuf) -> CommandContext {
     let session_id = std::env::var("ACRE_SHELL_SESSION_ID")
         .ok()
+        // The wrapper exports an empty id when the session-id call failed; treat that as no session.
         .filter(|value| !value.is_empty());
     let directive_file = std::env::var_os("ACRE_DIRECTIVE_FILE").map(PathBuf::from);
     let pid = std::env::var("ACRE_SHELL_PID")
@@ -312,6 +316,7 @@ fn create_context(cli: &Cli, cwd: PathBuf) -> CommandContext {
         .and_then(|value| value.parse().ok());
     CommandContext {
         cwd,
+        // JSON callers are never prompted, even from a terminal.
         interactive: !cli.json
             && std::io::IsTerminal::is_terminal(&std::io::stdin())
             && std::io::IsTerminal::is_terminal(&std::io::stdout()),
@@ -323,6 +328,7 @@ fn create_context(cli: &Cli, cwd: PathBuf) -> CommandContext {
             verbose: cli.verbose,
         },
         shell: ShellBridge {
+            // Both come from the wrapper function; either alone means we were called some other way.
             active: session_id.is_some() && directive_file.is_some(),
             directive_file,
             session_id,

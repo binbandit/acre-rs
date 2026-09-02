@@ -15,8 +15,10 @@ pub fn escape_markup(value: &str) -> String {
     let mut output = String::new();
     for character in value.chars() {
         let code = character as u32;
+        // Control characters in a branch name could drive the terminal; show them as escapes.
         if code <= 0x1f || (0x7f..=0x9f).contains(&code) {
             output.push_str(&format!("\\x{code:02x}"));
+        // Angle quotes keep user text from being parsed as our own tags.
         } else if character == '<' {
             output.push('‹');
         } else if character == '>' {
@@ -55,6 +57,7 @@ fn transform(value: &str, color: bool) -> String {
         let tag = &value[cursor + 1..end];
         let closing = tag.starts_with('/');
         let name = tag.trim_start_matches('/');
+        // Unknown tags pass through untouched; only our vocabulary is markup.
         let Some((_, ansi)) = TAGS.iter().find(|(candidate, _)| *candidate == name) else {
             output.push_str(&value[cursor..=end]);
             cursor = end + 1;
@@ -66,6 +69,7 @@ fn transform(value: &str, color: bool) -> String {
                     active.remove(position);
                 }
                 output.push_str("\x1b[0m");
+                // Reset clears every style, so re-apply the ones still open.
                 for style in &active {
                     if let Some((_, active_ansi)) = TAGS.iter().find(|(candidate, _)| candidate == style) {
                         output.push_str(active_ansi);

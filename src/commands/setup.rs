@@ -24,6 +24,7 @@ pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -
     let next = install_block(&current, &desired);
     let changed = next != current;
     let approved = if changed {
+        // Nobody to ask when piped; proceed rather than hang.
         yes || !context.interactive
             || confirm(
                 &renderer,
@@ -89,6 +90,7 @@ pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -
 }
 
 pub fn detect_shell() -> SupportedShell {
+    // PowerShell sets PSModulePath on every platform.
     if cfg!(windows) || std::env::var_os("PSModulePath").is_some() {
         return SupportedShell::Powershell;
     }
@@ -99,6 +101,7 @@ pub fn detect_shell() -> SupportedShell {
     {
         Some("fish") => SupportedShell::Fish,
         Some("bash") => SupportedShell::Bash,
+        // macOS default; the likeliest guess when SHELL is unset or unknown.
         _ => SupportedShell::Zsh,
     }
 }

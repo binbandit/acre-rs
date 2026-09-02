@@ -26,6 +26,7 @@ impl Fixture {
         fs::create_dir_all(&repo).expect("repo dir");
         let settings = serde_json::json!({
             "root": root,
+            // No background replenisher: it would race the test's own view of the pool.
             "pool": { "minSlots": 1, "maxSlots": 2, "replenish": false },
         });
         fs::write(&config, settings.to_string()).expect("config");
@@ -50,6 +51,7 @@ impl Fixture {
         command
             .current_dir(&self.repo)
             .env("ACRE_CONFIG", &self.config)
+            // Scrub the caller's shell integration so tests behave like a plain terminal.
             .env_remove("ACRE_SHELL_SESSION_ID")
             .env_remove("ACRE_DIRECTIVE_FILE")
             .env_remove("ACRE_SHELL_PID")
@@ -74,6 +76,7 @@ impl Fixture {
         PathBuf::from(created["path"].as_str().expect("workspace path"))
     }
 
+    // Simulates lost metadata: the worktrees survive, the state file does not.
     fn forget_state(&self) {
         let repositories = self.root.join("repositories");
         for entry in fs::read_dir(&repositories).expect("repositories dir").flatten() {

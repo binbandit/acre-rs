@@ -75,6 +75,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         )
         .with_details(serde_json::json!({ "path": target_path })));
     }
+    // "Current" means the shell itself would be pulled out from under us; that path needs the resume dance.
     let is_current = current_path
         .as_ref()
         .is_some_and(|current| canonical_or_absolute(current) == canonical_or_absolute(&target_path))
@@ -82,6 +83,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
 
     if workspace
         .as_ref()
+        // Unknown and external worktrees get the same treatment: we leave, we don't touch.
         .is_none_or(|workspace| workspace.ownership == WorkspaceOwnership::External)
     {
         let renderer = Renderer::new(context);
@@ -103,6 +105,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
             return Ok(exit::SUCCESS);
         }
         let destination = safe_destination(context, &config, &repository, &target_path)?;
+        // Drop our own lease before leaving, or the worktree looks in use forever.
         if let Some(session_id) = &context.shell.session_id {
             let _ = release_shell_session_lease(&config, &repository, session_id);
         }
@@ -171,6 +174,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
             exit::CONFLICT,
         )
     })?;
+    // Two phases: the shell moves out first, then calls back with this token to finish.
     let token = random_id();
     save_pending_done(
         &config,
@@ -216,6 +220,7 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
         })?;
     let registered = repository.worktree_at(&workspace.path);
     let status = read_status(&workspace.path)?;
+    // Anything that happened between the two phases voids the earlier assessment.
     if registered.is_none_or(|worktree| worktree.head != operation.expected_head)
         || status.fingerprint != operation.expected_status_fingerprint
     {
@@ -262,6 +267,7 @@ fn safe_destination(
         if let Some(previous) =
             read_shell_state(config, session_id)?.and_then(|state| state.previous_directory)
         {
+            // The previous location is only safe if it isn't inside the directory we're about to remove.
             if !is_inside(leaving_path, &previous) && previous.is_dir() {
                 return Ok(previous);
             }
@@ -283,6 +289,7 @@ fn safe_destination(
                 exit::REFUSED,
             )
         })?;
+    // Keep the relative position: leaving src/api lands in the primary's src/api when it exists.
     let candidate = context
         .cwd
         .strip_prefix(leaving_path)

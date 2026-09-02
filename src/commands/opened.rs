@@ -24,6 +24,7 @@ pub fn navigate_to_materialized(
         return Ok(destination);
     }
     render_materialized_summary(&renderer, result, &destination, true);
+    // Without the wrapper we can't move the shell; print the cd instead of failing.
     if !context.shell.active {
         renderer.line("");
         renderer.line("Move this shell:");

@@ -16,6 +16,7 @@ pub mod exit {
     pub const GIT: i32 = 7;
     pub const NETWORK: i32 = 8;
     pub const INTERRUPTED: i32 = 130;
+    // A private handshake with the shell wrapper: cd, then call back with the token.
     pub const RESUME: i32 = 194;
 }
 
