@@ -24,6 +24,16 @@ pub enum GitRefKind {
     Remote,
 }
 
+impl GitRef {
+    /// `origin/feature` for a remote branch, `feature` for a local one.
+    pub fn qualified_name(&self) -> String {
+        match &self.remote {
+            Some(remote) => format!("{remote}/{}", self.short_name),
+            None => self.short_name.clone(),
+        }
+    }
+}
+
 pub fn list_refs(cwd: &Path) -> Result<Vec<GitRef>> {
     let format = "%(refname)%00%(objectname)%00%(upstream)%00";
     let result = run_git(
@@ -38,56 +48,48 @@ pub fn list_refs(cwd: &Path) -> Result<Vec<GitRef>> {
     Ok(parse_refs(&result.stdout))
 }
 
+/// Parses `for-each-ref` output: NUL-separated name, object id, and upstream per ref, with a
+/// newline between refs that lands at the start of the next name.
 pub fn parse_refs(buffer: &[u8]) -> Vec<GitRef> {
     let values: Vec<String> = buffer
         .split(|byte| *byte == 0)
         .map(|value| String::from_utf8_lossy(value).into_owned())
         .collect();
-    let mut refs = Vec::new();
-    let mut index = 0;
-    while index + 2 < values.len() {
-        let full_name = values[index].trim_start_matches(['\r', '\n']).to_owned();
-        let oid = values[index + 1].clone();
-        let upstream = values[index + 2].trim_end_matches(['\r', '\n']).to_owned();
-        index += 3;
-        if full_name.is_empty() || oid.is_empty() || full_name.ends_with("/HEAD") {
-            continue;
-        }
-        if let Some(short_name) = full_name.strip_prefix("refs/heads/") {
-            let short_name = short_name.to_owned();
-            refs.push(GitRef {
-                full_name,
-                short_name,
-                oid,
-                kind: GitRefKind::Local,
-                remote: None,
-                upstream: if upstream.is_empty() {
-                    None
-                } else {
-                    Some(
+    values
+        .chunks_exact(3)
+        .filter_map(|record| {
+            let full_name = record[0].trim_start_matches(['\r', '\n']);
+            let oid = record[1].as_str();
+            let upstream = record[2].trim_end_matches(['\r', '\n']);
+            if full_name.is_empty() || oid.is_empty() || full_name.ends_with("/HEAD") {
+                return None;
+            }
+            if let Some(short_name) = full_name.strip_prefix("refs/heads/") {
+                return Some(GitRef {
+                    full_name: full_name.to_owned(),
+                    short_name: short_name.to_owned(),
+                    oid: oid.to_owned(),
+                    kind: GitRefKind::Local,
+                    remote: None,
+                    upstream: (!upstream.is_empty()).then(|| {
                         upstream
                             .strip_prefix("refs/remotes/")
-                            .unwrap_or(&upstream)
-                            .to_owned(),
-                    )
-                },
-            });
-        } else if let Some(short) = full_name.strip_prefix("refs/remotes/") {
-            if let Some((remote, short_name)) = short.split_once('/') {
-                let remote = remote.to_owned();
-                let short_name = short_name.to_owned();
-                refs.push(GitRef {
-                    full_name,
-                    short_name,
-                    oid,
-                    kind: GitRefKind::Remote,
-                    remote: Some(remote),
-                    upstream: None,
+                            .unwrap_or(upstream)
+                            .to_owned()
+                    }),
                 });
             }
-        }
-    }
-    refs
+            let (remote, short_name) = full_name.strip_prefix("refs/remotes/")?.split_once('/')?;
+            Some(GitRef {
+                full_name: full_name.to_owned(),
+                short_name: short_name.to_owned(),
+                oid: oid.to_owned(),
+                kind: GitRefKind::Remote,
+                remote: Some(remote.to_owned()),
+                upstream: None,
+            })
+        })
+        .collect()
 }
 
 pub fn validate_branch_name(cwd: &Path, branch: &str) -> Result<bool> {

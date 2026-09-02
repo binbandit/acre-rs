@@ -56,3 +56,16 @@ fn parse_batch(output: &[u8], files: &[&str]) -> BTreeMap<String, Vec<u8>> {
     }
     values
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_present_blobs_and_skips_missing_ones() {
+        let output = b"abc123 blob 5\nhello\nHEAD:package.json missing\n";
+        let files = parse_batch(output, &["README.md", "package.json"]);
+        assert_eq!(files.get("README.md").map(Vec::as_slice), Some(&b"hello"[..]));
+        assert!(!files.contains_key("package.json"));
+    }
+}

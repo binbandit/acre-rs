@@ -43,3 +43,24 @@ pub fn parse_hosted_remote(remote_url: &str) -> Option<HostedRemote> {
         repo,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ssh_and_https_remotes() {
+        for url in [
+            "git@github.com:acme/widgets.git",
+            "https://github.com/acme/widgets",
+            "ssh://git@github.com/acme/widgets.git",
+        ] {
+            let remote = parse_hosted_remote(url).expect(url);
+            assert_eq!(
+                (remote.host.as_str(), remote.owner.as_str(), remote.repo.as_str()),
+                ("github.com", "acme", "widgets")
+            );
+        }
+        assert!(parse_hosted_remote("/srv/git/widgets.git").is_none());
+    }
+}

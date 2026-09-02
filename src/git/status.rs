@@ -72,6 +72,8 @@ pub fn parse_status(buffer: &[u8]) -> WorkingTreeStatus {
             let parts: Vec<&str> = row.split(' ').collect();
             let xy = parts.get(1).copied().unwrap_or("..");
             let rename = row.starts_with("2 ");
+            // Porcelain v2 rows: `1 XY sub mH mI mW hH hI path`, `2 XY sub mH mI mW hH hI Xscore path`
+            // (the original path follows as the next NUL-separated field), `u XY sub m1 m2 m3 mW h1 h2 h3 path`.
             let path_index = if row.starts_with("1 ") {
                 8
             } else if rename {

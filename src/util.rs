@@ -198,3 +198,15 @@ pub fn shell_quote(value: &Path) -> String {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_slugs_are_safe_directory_names() {
+        assert_eq!(branch_slug("feature/refunds"), "feature-refunds");
+        assert_eq!(branch_slug("../weird:name?"), "weird-name");
+        assert_eq!(branch_slug("///"), "workspace");
+    }
+}
