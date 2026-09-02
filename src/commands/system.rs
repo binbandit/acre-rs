@@ -4,6 +4,7 @@ use crate::cli::CommandContext;
 use crate::error::{Result, exit};
 use crate::git::repository::discover_repository;
 use crate::git::runner::{RunOptions, decode_stdout, run_process};
+use crate::model::EnvironmentState;
 use crate::model::WorkspaceStatus;
 use crate::state::config::load_config;
 use crate::state::repository::load_repository_state;
@@ -33,7 +34,7 @@ pub fn command_system_warm(context: &CommandContext, slots: Option<usize>) -> Re
                 slot.environment
                     .as_ref()
                     .map(|environment| environment.state)
-                    .unwrap_or(crate::model::EnvironmentState::Cold)
+                    .unwrap_or(EnvironmentState::Cold)
             ));
         }
     }
@@ -64,7 +65,7 @@ pub fn command_system_inspect(context: &CommandContext) -> Result<i32> {
                 .environment
                 .as_ref()
                 .map(|environment| environment.state)
-                .unwrap_or(crate::model::EnvironmentState::Unknown)
+                .unwrap_or(EnvironmentState::Unknown)
         ));
         renderer.line(format!(
             "    <dim>{}</dim>",
@@ -88,7 +89,7 @@ pub fn command_system_inspect(context: &CommandContext) -> Result<i32> {
             slot.environment
                 .as_ref()
                 .map(|environment| environment.state)
-                .unwrap_or(crate::model::EnvironmentState::Cold),
+                .unwrap_or(EnvironmentState::Cold),
             slot.environment
                 .as_ref()
                 .map(|environment| &environment.fingerprint[..environment.fingerprint.len().min(8)])

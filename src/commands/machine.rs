@@ -3,6 +3,7 @@
 use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
 use crate::git::repository::{discover_repository, discover_repository_from_common_dir};
+use crate::model::EnvironmentState;
 use crate::state::config::load_config;
 use crate::state::index::load_repository_index;
 use crate::state::repository::load_repository_state;
@@ -74,7 +75,7 @@ pub fn command_acquire(
                 .environment
                 .as_ref()
                 .map(|environment| environment.state)
-                .unwrap_or(crate::model::EnvironmentState::Unknown),
+                .unwrap_or(EnvironmentState::Unknown),
         ));
     }
     Ok(exit::SUCCESS)

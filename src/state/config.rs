@@ -5,43 +5,59 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::error::{AcreError, Result, exit};
-use crate::model::{AcreConfig, EnvironmentConfig, PoolConfig, RepoConfig, SafetyConfig};
+use crate::model::{
+    AcreConfig, EnvironmentConfig, PoolConfig, RepoConfig, RepoEnvironmentConfig, SafetyConfig,
+};
 use crate::state::paths::{config_path, default_acre_root};
 use crate::state::storage::{read_json, write_json};
 use crate::util::validate_relative_path;
 
-pub fn default_config() -> AcreConfig {
-    AcreConfig {
-        schema_version: 1,
-        root: default_acre_root(),
-        pool: PoolConfig {
+impl Default for AcreConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            root: default_acre_root(),
+            pool: PoolConfig::default(),
+            environment: EnvironmentConfig::default(),
+            safety: SafetyConfig::default(),
+        }
+    }
+}
+
+impl Default for PoolConfig {
+    fn default() -> Self {
+        Self {
             min_slots: 1,
             max_slots: 4,
             replenish: true,
             idle_retention_days: 30,
-        },
-        environment: EnvironmentConfig {
+        }
+    }
+}
+
+impl Default for EnvironmentConfig {
+    fn default() -> Self {
+        Self {
             cache_roots: Vec::new(),
             required_roots: Vec::new(),
             seed_files: vec![".env".to_owned(), ".env.local".to_owned()],
             excluded_roots: Vec::new(),
-        },
-        safety: SafetyConfig {
-            detect_processes: true,
-            block_unknown_ignored_files: true,
-        },
+        }
     }
 }
 
+impl Default for SafetyConfig {
+    fn default() -> Self {
+        Self {
+            detect_processes: true,
+            block_unknown_ignored_files: true,
+        }
+    }
+}
+
+/// The user's configuration over the defaults; a missing file means all defaults.
 pub fn load_config() -> Result<AcreConfig> {
-    let path = config_path();
-    let Some(stored) = read_json::<Value>(&path)? else {
-        return Ok(default_config());
-    };
-    let mut merged = serde_json::to_value(default_config())?;
-    merge_json(&mut merged, stored);
-    let config: AcreConfig = serde_json::from_value(merged)
-        .map_err(|error| AcreError::json(format!("could not parse {}", path.display()), error))?;
+    let config = read_json::<AcreConfig>(&config_path())?.unwrap_or_default();
     validate_acre_config(&config)?;
     Ok(config)
 }
@@ -95,7 +111,7 @@ pub fn validate_acre_config(config: &AcreConfig) -> Result<()> {
 
 pub fn write_default_repo_config(path: &Path) -> Result<()> {
     let value = RepoConfig {
-        environment: Some(crate::model::RepoEnvironmentConfig {
+        environment: Some(RepoEnvironmentConfig {
             cache_roots: Vec::new(),
             required_roots: Vec::new(),
             seed_files: vec![".env".to_owned(), ".env.local".to_owned()],
@@ -108,7 +124,7 @@ pub fn write_default_repo_config(path: &Path) -> Result<()> {
 pub fn ensure_default_config_file() -> Result<()> {
     let path = config_path();
     if !path.exists() {
-        save_config(&default_config())?;
+        save_config(&AcreConfig::default())?;
     }
     Ok(())
 }
@@ -138,21 +154,6 @@ pub fn set_config_value(config: &mut AcreConfig, key: &str, raw: &str) -> Result
     }
     validate_acre_config(config)?;
     Ok(value)
-}
-
-fn merge_json(target: &mut Value, source: Value) {
-    match (target, source) {
-        (Value::Object(target), Value::Object(source)) => {
-            for (key, value) in source {
-                if let Some(existing) = target.get_mut(&key) {
-                    merge_json(existing, value);
-                } else {
-                    target.insert(key, value);
-                }
-            }
-        }
-        (target, source) => *target = source,
-    }
 }
 
 fn validate_environment_paths(values: impl IntoIterator<Item = impl AsRef<str>>, source: &str) -> Result<()> {

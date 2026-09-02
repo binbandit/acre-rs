@@ -1,5 +1,6 @@
 //! Per-repository state: loading reconciled against Git, recovery of orphaned worktrees, locked access.
 
+use crate::model::TargetKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -195,9 +196,9 @@ fn recover_owned_worktrees(
                 slot_id: None,
                 target: StoredTarget {
                     kind: if local_branch.is_some() {
-                        crate::model::TargetKind::LocalBranch
+                        TargetKind::LocalBranch
                     } else {
-                        crate::model::TargetKind::Worktree
+                        TargetKind::Worktree
                     },
                     display_name: local_branch.clone().unwrap_or_else(|| {
                         format!("detached-{}", &worktree.head[..worktree.head.len().min(8)])

@@ -5,9 +5,8 @@ use std::process::{Command, Stdio};
 use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
 use crate::git::repository::discover_repository;
-use crate::state::config::{
-    default_config, load_config, save_config, set_config_value, write_default_repo_config,
-};
+use crate::model::AcreConfig;
+use crate::state::config::{load_config, save_config, set_config_value, write_default_repo_config};
 use crate::state::paths::config_path;
 use crate::ui::output::Renderer;
 
@@ -37,7 +36,7 @@ pub fn command_config_init(context: &CommandContext, force: bool) -> Result<i32>
         )
         .with_details(serde_json::json!({ "path": target })));
     }
-    save_config(&default_config())?;
+    save_config(&AcreConfig::default())?;
     Renderer::new(context).line(format!("<green>Created</green> <dim>{}</dim>", target.display()));
     Ok(exit::SUCCESS)
 }
@@ -58,7 +57,7 @@ pub fn command_config_set(context: &CommandContext, key: &str, value: &str) -> R
 pub fn command_config_edit(_context: &CommandContext) -> Result<i32> {
     let target = config_path();
     if !target.exists() {
-        save_config(&default_config())?;
+        save_config(&AcreConfig::default())?;
     }
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))

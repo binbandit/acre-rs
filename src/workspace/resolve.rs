@@ -5,6 +5,7 @@ use crate::git::operations::fetch_ref;
 use crate::git::refs::{GitRefKind, list_refs, resolve_oid, validate_branch_name};
 use crate::git::repository::Repository;
 use crate::git::worktrees::GitWorktree;
+use crate::model::WorkspaceStatus;
 use crate::model::{PullRequestTarget, RepositoryState, StoredTarget, TargetKind, TrustLevel};
 use crate::provider::github::{
     ensure_pull_request_object, parse_pull_request_selector, resolve_pull_request,
@@ -51,7 +52,7 @@ pub fn resolve_existing_target(
     if typed.kind == SelectorKind::Auto {
         if let Some(number) = parse_pull_request_selector(value) {
             if let Some(existing) = state.workspaces.iter().find(|workspace| {
-                workspace.status != crate::model::WorkspaceStatus::Broken
+                workspace.status != WorkspaceStatus::Broken
                     && workspace
                         .target
                         .pull_request

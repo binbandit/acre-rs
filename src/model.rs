@@ -205,7 +205,7 @@ pub struct ShellSessionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct AcreConfig {
     pub schema_version: u32,
     pub root: PathBuf,
@@ -215,7 +215,7 @@ pub struct AcreConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct PoolConfig {
     pub min_slots: usize,
     pub max_slots: usize,
@@ -224,15 +224,11 @@ pub struct PoolConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct EnvironmentConfig {
-    #[serde(default)]
     pub cache_roots: Vec<String>,
-    #[serde(default)]
     pub required_roots: Vec<String>,
-    #[serde(default)]
     pub seed_files: Vec<String>,
-    #[serde(default)]
     pub excluded_roots: Vec<String>,
 }
 
@@ -256,7 +252,7 @@ pub struct RepoEnvironmentConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct SafetyConfig {
     pub detect_processes: bool,
     pub block_unknown_ignored_files: bool,

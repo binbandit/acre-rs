@@ -1,5 +1,6 @@
 //! `acre done`: return a workspace, resuming after the shell has moved out of it when needed.
 
+use crate::model::AcreConfig;
 use std::path::{Path, PathBuf};
 
 use crate::cli::CommandContext;
@@ -253,7 +254,7 @@ pub fn command_resume_done(context: &CommandContext, token: &str) -> Result<i32>
 
 fn safe_destination(
     context: &CommandContext,
-    config: &crate::model::AcreConfig,
+    config: &AcreConfig,
     repository: &Repository,
     leaving_path: &Path,
 ) -> Result<PathBuf> {
