@@ -59,6 +59,7 @@ pub fn parse_worktree_porcelain(buffer: &[u8]) -> Vec<GitWorktree> {
             lock_reason: current.lock_reason.take(),
             prunable: current.prunable,
             prune_reason: current.prune_reason.take(),
+            // Git always lists the main worktree first.
             is_main: rows.is_empty(),
             exists: true,
         });
@@ -68,6 +69,7 @@ pub fn parse_worktree_porcelain(buffer: &[u8]) -> Vec<GitWorktree> {
     let mut rows = Vec::new();
     let mut current = Current::default();
     for raw in buffer.split(|byte| *byte == 0) {
+        // Records are separated by a blank line, which lands as a newline glued to the next key.
         let raw = raw.strip_prefix(b"\n").unwrap_or(raw);
         if raw.is_empty() {
             continue;
@@ -115,6 +117,7 @@ pub fn with_existence(mut worktrees: Vec<GitWorktree>) -> Vec<GitWorktree> {
 pub fn find_current_worktree(worktrees: &[GitWorktree], cwd: &Path) -> Option<GitWorktree> {
     let cwd = canonical_or_absolute(cwd);
     let mut candidates = worktrees.to_vec();
+    // Longest path first, so a nested worktree wins over the one that contains it.
     candidates.sort_by_key(|worktree| std::cmp::Reverse(worktree.path.as_os_str().len()));
     candidates.into_iter().find(|worktree| {
         cwd == canonical_or_absolute(&worktree.path) || cwd.starts_with(canonical_or_absolute(&worktree.path))

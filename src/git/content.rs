@@ -38,6 +38,7 @@ fn parse_batch(output: &[u8], files: &[&str]) -> BTreeMap<String, Vec<u8>> {
         let newline = offset + relative_newline;
         let header = String::from_utf8_lossy(&output[offset..newline]);
         offset = newline + 1;
+        // A missing file gets a header but no body, so there is nothing to skip past.
         if header.ends_with(" missing") {
             continue;
         }
@@ -48,10 +49,12 @@ fn parse_batch(output: &[u8], files: &[&str]) -> BTreeMap<String, Vec<u8>> {
         let Some(size) = size else {
             continue;
         };
+        // Truncated output; trust nothing past this point.
         if offset + size > output.len() {
             break;
         }
         values.insert((*file).to_owned(), output[offset..offset + size].to_vec());
+        // Skip the newline git appends after each body.
         offset = (offset + size + 1).min(output.len());
     }
     values

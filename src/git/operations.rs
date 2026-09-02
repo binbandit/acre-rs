@@ -49,6 +49,7 @@ pub fn move_worktree(repository: &Repository, from: &Path, to: &Path) -> Result<
     if moved.status == 0 {
         return Ok(());
     }
+    // With no source directory left there is nothing to move by hand.
     if !from.exists() {
         return Err(AcreError::new(
             "ACRE_WORKTREE_MOVE_FAILED",
@@ -92,6 +93,7 @@ pub fn bind_target(repository: &Repository, workspace_path: &Path, target: &Reso
             ));
         }
     }
+    // The ref may have moved between resolving and switching; refuse rather than open the wrong commit.
     verify_bound_head(repository, workspace_path, target)
 }
 
@@ -109,6 +111,7 @@ pub fn detach_workspace(workspace_path: &Path) -> Result<()> {
 }
 
 pub fn reset_workspace(workspace_path: &Path, oid: &str) -> Result<()> {
+    // Tracked files only; ignored caches are cleared separately, by name.
     git(workspace_path, &["reset", "--hard", oid])?;
     git(workspace_path, &["switch", "--detach", oid])?;
     Ok(())
@@ -142,6 +145,7 @@ pub fn fetch_ref(
     destination: Option<&str>,
 ) -> Result<()> {
     let refspec = match destination {
+        // Forced: a PR head or default branch may have been rewritten since we last fetched.
         Some(destination) => format!("+{source}:{destination}"),
         None => source.to_owned(),
     };
@@ -160,6 +164,7 @@ pub fn fetch_ref(
 pub fn delete_branch_if_expected(repository: &Repository, branch: &str, expected_oid: &str) -> Result<bool> {
     let result = run_git_with(
         &repository.top_level,
+        // update-ref with the old value is atomic: it refuses if anyone moved the branch meanwhile.
         &["update-ref", "-d", &format!("refs/heads/{branch}"), expected_oid],
         RunOptions {
             timeout: Some(GIT_TIMEOUT),

@@ -71,6 +71,7 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
     }
     let text = String::from_utf8_lossy(&result.stdout);
     let lines: Vec<&str> = text.trim().lines().collect();
+    // Bare repositories answer everything but is-inside-work-tree; we need a checkout to work in.
     if lines.len() < 4 || lines[3] != "true" {
         return Err(AcreError::new(
             "ACRE_NOT_IN_REPOSITORY",
@@ -84,6 +85,7 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
     let common_dir = PathBuf::from(lines[2]);
     let worktrees = with_existence(list_worktrees(&top_level)?);
     let config = read_repository_config(&top_level)?;
+    // origin by convention, otherwise whichever remote sorts first so the choice is at least stable.
     let remote = if config.remote_urls.contains_key("origin") {
         Some("origin".to_owned())
     } else {
@@ -104,12 +106,14 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| "repository".to_owned());
+    // Every clone of the same remote shares one identity; only a remoteless repo is keyed by its path.
     let identity = remote_url
         .as_deref()
         .unwrap_or_else(|| common_dir.to_str().unwrap_or("repository"));
     let remote_head = remote
         .as_deref()
         .and_then(|remote| read_remote_head(&common_dir, remote));
+    // What the remote says HEAD is beats init.defaultBranch, which beats whatever main happens to be on.
     let default_branch = remote_head.or(config.default_branch).or_else(|| {
         worktrees
             .iter()
@@ -134,6 +138,7 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
 
 pub fn discover_repository_from_common_dir(common_dir: &Path) -> Result<Repository> {
     let git_dir = format!("--git-dir={}", common_dir.display());
+    // Run from beside the .git dir: the caller's own directory may be a workspace that no longer exists.
     let parent = common_dir.parent().unwrap_or_else(|| Path::new("."));
     let result = run_process(
         "git",
@@ -161,6 +166,7 @@ pub fn discover_repository_from_common_dir(common_dir: &Path) -> Result<Reposito
                 exit::ENVIRONMENT,
             )
         })?;
+    // The first listed worktree is the main one; discovering from there gives the full picture.
     discover_repository(&first.path)
 }
 
@@ -180,6 +186,7 @@ fn read_repository_config(cwd: &Path) -> Result<RepositoryConfigSnapshot> {
             "^(remote\\..*\\.url|init\\.defaultBranch)$",
         ],
         RunOptions {
+            // get-regexp exits 1 when nothing matches, which is just a repo with no remotes.
             accepted_statuses: &[0, 1],
             ..RunOptions::default()
         },
@@ -207,6 +214,7 @@ fn read_repository_config(cwd: &Path) -> Result<RepositoryConfigSnapshot> {
 }
 
 fn read_remote_head(common_dir: &Path, remote: &str) -> Option<String> {
+    // Only exists after a clone or remote set-head; missing just means no opinion.
     let path = common_dir.join("refs").join("remotes").join(remote).join("HEAD");
     let text = fs::read_to_string(path).ok()?;
     let prefix = format!("ref: refs/remotes/{remote}/");

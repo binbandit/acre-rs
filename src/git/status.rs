@@ -81,6 +81,7 @@ pub fn parse_status(buffer: &[u8]) -> WorkingTreeStatus {
             } else {
                 10
             };
+            // Re-join: the path itself may contain spaces.
             let path = parts.get(path_index..).unwrap_or_default().join(" ");
             let original_path = if rename {
                 fields.get(index + 1).cloned()
@@ -106,12 +107,14 @@ pub fn parse_status(buffer: &[u8]) -> WorkingTreeStatus {
                 worktree: worktree_state.to_string(),
                 kind: StatusEntryKind::Changed,
             });
+            // A rename consumed its original-path field too.
             index += if rename { 2 } else { 1 };
             continue;
         }
         index += 1;
     }
 
+    // The fingerprint lets a resumed `done` prove nothing changed while the shell was moving.
     let mut fingerprint_input = Vec::new();
     for entry in &entries {
         fingerprint_input.extend_from_slice(entry.index.as_bytes());
@@ -153,6 +156,7 @@ pub fn in_progress_operation(cwd: &Path) -> Result<Option<String>> {
             "REVERT_HEAD",
         ],
     )?;
+    // Same order as the --git-path arguments above; a rebase has two marker directories.
     let names = ["merge", "rebase", "rebase", "cherry-pick", "revert"];
     for (path, name) in String::from_utf8_lossy(&result.stdout).lines().zip(names) {
         if Path::new(path).exists() {

@@ -61,6 +61,7 @@ pub fn parse_refs(buffer: &[u8]) -> Vec<GitRef> {
             let full_name = record[0].trim_start_matches(['\r', '\n']);
             let oid = record[1].as_str();
             let upstream = record[2].trim_end_matches(['\r', '\n']);
+            // origin/HEAD is a pointer, not a branch anyone opens.
             if full_name.is_empty() || oid.is_empty() || full_name.ends_with("/HEAD") {
                 return None;
             }
@@ -97,6 +98,7 @@ pub fn validate_branch_name(cwd: &Path, branch: &str) -> Result<bool> {
         cwd,
         &["check-ref-format", "--branch", branch],
         RunOptions {
+            // 1 means invalid, 128 means git itself objected; both are just "no".
             accepted_statuses: &[0, 1, 128],
             ..RunOptions::default()
         },
@@ -107,6 +109,7 @@ pub fn validate_branch_name(cwd: &Path, branch: &str) -> Result<bool> {
 pub fn resolve_oid(cwd: &Path, reference: &str) -> Result<Option<String>> {
     let result = run_git_with(
         cwd,
+        // ^{commit} peels tags, so a tag name resolves to something we can check out detached.
         &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
         RunOptions {
             accepted_statuses: &[0, 128],

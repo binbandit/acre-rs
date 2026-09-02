@@ -72,6 +72,7 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
 
     let mut stdout = child.stdout.take().expect("stdout configured as piped");
     let mut stderr = child.stderr.take().expect("stderr configured as piped");
+    // Drain both pipes on their own threads: a child that fills stderr while we block on stdout would deadlock.
     let stdout_thread = thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = stdout.read_to_end(&mut bytes);
@@ -90,6 +91,7 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
         {
             Some(status) => status,
             None => {
+                // Kill and reap, or the timed-out child lingers as a zombie holding the pipes open.
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(AcreError::new(
@@ -108,6 +110,7 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
             .map_err(|error| AcreError::io(format!("could not wait for {executable}"), error))?,
     };
 
+    // No code means a signal killed it; call that a plain failure rather than success.
     let status_code = status.code().unwrap_or(1);
     let result = ProcessResult {
         argv: std::iter::once(executable)
@@ -173,6 +176,7 @@ fn process_failure(result: ProcessResult) -> AcreError {
         .first()
         .cloned()
         .unwrap_or_else(|| "process".to_owned());
+    // Git's stderr is the user-facing message; fall back to the status only when it said nothing.
     let message = if stderr.is_empty() {
         format!("{executable} exited with status {}.", result.status)
     } else {

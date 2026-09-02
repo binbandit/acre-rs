@@ -9,6 +9,7 @@ pub struct HostedRemote {
 
 pub fn parse_hosted_remote(remote_url: &str) -> Option<HostedRemote> {
     let sanitized = remote_url.trim().trim_end_matches('/').trim_end_matches(".git");
+    // scp-style git@host:owner/repo has no scheme; handle it before the URL form.
     if !sanitized.contains("://") {
         if let Some((left, right)) = sanitized.split_once(':') {
             let host = left.rsplit('@').next()?.to_owned();
@@ -31,6 +32,7 @@ pub fn parse_hosted_remote(remote_url: &str) -> Option<HostedRemote> {
     }
     let repo = parts.pop()?.to_owned();
     Some(HostedRemote {
+        // Strip user@ and :port from the authority; only the hostname identifies the forge.
         host: host
             .split('@')
             .next_back()

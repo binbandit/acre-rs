@@ -54,6 +54,7 @@ pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<P
         .remote_url
         .as_deref()
         .and_then(parse_hosted_remote)
+        // GitHub Enterprise hosts qualify too; gh handles them.
         .filter(|remote| remote.host.to_ascii_lowercase().contains("github"))
         .ok_or_else(|| {
             AcreError::new(
@@ -103,6 +104,7 @@ pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<P
             .head_repository
             .and_then(|repository| repository.name_with_owner)
             .unwrap_or(repo_slug),
+        // A missing field would read as trusted, so keep isCrossRepository in the --json list above.
         cross_repository: parsed.is_cross_repository.unwrap_or(false),
     })
 }
@@ -111,6 +113,7 @@ pub fn ensure_pull_request_object(
     repository: &Repository,
     pull_request: &PullRequestTarget,
 ) -> Result<String> {
+    // Already fetched (or the head is in our history); no network needed.
     if resolve_oid(&repository.top_level, &pull_request.head_oid)?.is_some() {
         return Ok(pull_request.head_oid.clone());
     }
@@ -121,6 +124,7 @@ pub fn ensure_pull_request_object(
             exit::NETWORK,
         )
     })?;
+    // Our own ref namespace, so nothing collides with the user's remote-tracking refs.
     let destination = format!("refs/acre/pull/{}", pull_request.number);
     fetch_ref(
         repository,
