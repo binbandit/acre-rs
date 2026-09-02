@@ -53,6 +53,7 @@ pub fn return_workspace(
     if let Some(lease_id) = &options.remove_lease_id {
         lease::release(state, lease_id)?;
     }
+    // The caller's own shell lease must not count as "someone else is using it".
     if let Some(session_id) = &options.assessment.allowed_session_id {
         lease::release_session(state, session_id, Some(&workspace.id));
     }
@@ -77,6 +78,7 @@ pub fn return_workspace(
     }
 
     let assessment = assess_workspace(&repository, state, &workspace, config, &options.assessment)?;
+    // Refusing still saves: the lease changes above must stick.
     if !assessment.safe {
         locked.save(config)?;
         return Ok(ReturnResult {
@@ -95,11 +97,13 @@ pub fn return_workspace(
         )
         .with_details(serde_json::json!({ "path": workspace.path }))
     })?;
+    // Fingerprint the commit actually checked out, not the one the record remembers.
     let plan = build_environment_plan(&repository, &registered.head, config)?;
     let environment = inspect_environment(&workspace.path, &plan)?;
     let slot = slot_to_keep(config, &repository, state, &workspace, &environment);
     let pooled = slot.is_some();
 
+    // Set once the worktree has moved, so restore knows where to fetch it back from.
     let mut moved_to = None;
     if let Err(error) = pool_or_remove(
         config,
@@ -135,6 +139,7 @@ fn slot_to_keep(
         .as_ref()
         .and_then(|id| state.slots.iter().find(|slot| &slot.id == id))
         .cloned()?;
+    // Untrusted caches came from a fork; they never enter the pool.
     if workspace.trust != TrustLevel::Trusted {
         return None;
     }
@@ -150,12 +155,14 @@ fn slot_to_keep(
             .as_ref()
             .is_some_and(|candidate| candidate.fingerprint == environment.fingerprint)
     });
+    // Room in the pool, or a warm generation the pool doesn't have yet.
     let worth_keeping =
         idle.len() < config.pool.max_slots || (!matching_idle && environment.state != EnvironmentState::Cold);
     if !worth_keeping {
         return None;
     }
     if idle.len() >= config.pool.max_slots {
+        // Full pool: evict the stalest idle slot to make room, but only if git lets it go.
         let victim = idle.iter().min_by_key(|slot| &slot.last_used_at)?;
         if remove_worktree(repository, &victim.path, false).is_err() {
             return None;
@@ -176,15 +183,18 @@ fn pool_or_remove(
     slot: Option<WorkspaceSlot>,
     moved_to: &mut Option<PathBuf>,
 ) -> Result<()> {
+    // Detach first so the branch is free to be checked out elsewhere immediately.
     detach_workspace(&workspace.path)?;
     match slot {
         Some(mut slot) => {
             let idle_path = slots_root(config, repository).join(&slot.id);
+            // A leftover directory at the slot path (a crashed earlier return) would block the move.
             if idle_path.exists() {
                 remove_path(&idle_path)?;
             }
             move_worktree(repository, &workspace.path, &idle_path)?;
             *moved_to = Some(idle_path.clone());
+            // Secrets never sit in the pool: the next occupant could be an untrusted PR.
             clear_seed_files(&idle_path, &workspace.seeded_paths)?;
             slot.path = idle_path.clone();
             slot.status = WorkspaceStatus::Idle;
@@ -228,6 +238,7 @@ fn restore_workspace(
     if !workspace.path.exists() {
         create_detached_worktree(repository, &workspace.path, &workspace.target.oid)?;
     }
+    // Re-bind the branch we detached, so the user finds the workspace as they left it.
     restore_stored_target(&workspace.path, &workspace.target)?;
     let _ = seed_files_only(
         repository.primary_path(),

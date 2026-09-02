@@ -29,6 +29,7 @@ impl IgnoredLayout {
 /// entry is opened up when it holds nothing but cache roots, and a multi-component root such
 /// as `.next/cache` is completed inside its ignored parent.
 pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<IgnoredLayout> {
+    // Top-level roots are taken on sight, ignored or not, matching how they were always handled.
     let mut found: BTreeSet<String> = cache_roots
         .iter()
         .filter(|root| worktree.join(root).exists())
@@ -74,6 +75,7 @@ fn cache_roots_filling(worktree: &Path, relative: &str, cache_roots: &[String]) 
             found.push(child_relative);
             continue;
         }
+        // A file or symlink outside every root: the directory is unknown data, stop looking.
         if !child.file_type().is_ok_and(|kind| kind.is_dir()) {
             return None;
         }

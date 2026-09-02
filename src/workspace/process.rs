@@ -52,6 +52,7 @@ fn find_linux_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> 
             continue;
         }
         let process_root = entry.path();
+        // Unreadable cwd means another user's process; we can't know, so we don't count it.
         let Ok(cwd) = fs::read_link(process_root.join("cwd")) else {
             continue;
         };
@@ -96,6 +97,7 @@ fn find_macos_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> 
     let mut ignored: BTreeSet<u32> = ignored_pids.iter().copied().collect();
     ignored.insert(std::process::id());
     let mut rows = Vec::new();
+    // -F output is one field per line: p, then c, then n, per process.
     let mut pid = None;
     let mut command = String::new();
     for line in String::from_utf8_lossy(&result.stdout).lines() {

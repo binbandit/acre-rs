@@ -75,6 +75,7 @@ pub fn assess_workspace(
         workspace.baseline_ignored.iter().map(String::as_str).collect();
     let new_ignored = ignored
         .into_iter()
+        // Ignored data that was there at activation is ours; only new arrivals are unknown.
         .filter(|entry| !baseline.contains(entry.as_str()))
         .collect::<Vec<_>>();
     let changed_seed_files = changed_seed_files(&workspace.path, &workspace.baseline_seed_files)?;
@@ -82,6 +83,7 @@ pub fn assess_workspace(
         .leases
         .iter()
         .filter(|lease| {
+            // The caller's own lease or session doesn't count against it.
             lease.workspace_id == workspace.id
                 && options.allowed_lease_id.as_deref() != Some(lease.id.as_str())
                 && options.allowed_session_id.as_deref() != lease.session_id.as_deref()

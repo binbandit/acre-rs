@@ -47,6 +47,7 @@ fn warm_base_oid(repository: &Repository) -> Result<String> {
         (_, Some(branch)) => branch.clone(),
         _ => "HEAD".to_owned(),
     };
+    // A fresh repo may have no default-branch commit yet; fall back to wherever we stand.
     Ok(resolve_oid(&repository.top_level, &base_ref)?
         .or_else(|| {
             repository
@@ -78,6 +79,7 @@ pub fn select_slot(
         .slots
         .iter()
         .filter(|slot| {
+            // Idle in our records is not enough; the directory must still exist for git.
             slot.status == WorkspaceStatus::Idle
                 && repository
                     .worktree_at(&slot.path)
@@ -91,6 +93,7 @@ pub fn select_slot(
                 .as_ref()
                 .is_some_and(|environment| environment.fingerprint == plan.fingerprint)
         })
+        // The most recently used match has the freshest caches.
         .max_by_key(|slot| &slot.last_used_at)
         .or_else(|| {
             healthy.iter().find(|slot| {
@@ -124,6 +127,7 @@ fn create_slot(
             &source,
             &slot_path,
             plan,
+            // Untrusted on purpose: a pool slot must never carry seed files.
             TrustLevel::Untrusted,
             &repository.top_level,
         ) {
@@ -160,6 +164,7 @@ pub fn find_environment_source(
     let candidate = state
         .workspaces
         .iter()
+        // Never clone from an untrusted (fork PR) workspace, whatever its caches look like.
         .filter(|workspace| workspace.trust == TrustLevel::Trusted && matches(&workspace.environment))
         .map(|workspace| &workspace.path)
         .chain(
@@ -188,5 +193,6 @@ pub fn find_environment_source(
         return Ok(None);
     }
     let snapshot = inspect_environment(primary, &primary_plan)?;
+    // A primary checkout with nothing installed is not a source, just a matching plan.
     Ok((!snapshot.present_roots.is_empty()).then(|| primary.to_path_buf()))
 }

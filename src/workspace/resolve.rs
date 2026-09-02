@@ -74,6 +74,7 @@ pub fn resolve_existing_target(
     let typed = parse_typed_selector(selector)?;
     let value = typed.value.as_str();
 
+    // Only a bare selector can be a PR; `branch:pr:12` means a branch literally named that.
     if typed.kind == SelectorKind::Auto {
         if let Some(number) = parse_pull_request_selector(value) {
             return pull_request_target(repository, state, number);
@@ -130,6 +131,7 @@ fn pull_request_target(
     }
     let mut pull_request = resolve_pull_request(repository, &number.to_string())?;
     let oid = ensure_pull_request_object(repository, &pull_request)?;
+    // gh reports the head it knows; the object we actually fetched is what we bind to.
     pull_request.head_oid = oid.clone();
     let trust = if pull_request.cross_repository {
         TrustLevel::Untrusted
@@ -160,6 +162,7 @@ fn worktree_target(
     let worktree = match typed.kind {
         SelectorKind::Worktree => by_path(),
         SelectorKind::Branch => by_branch(),
+        // Branch names win over paths: "main" is almost never a directory the user meant.
         SelectorKind::Auto => by_branch().or_else(by_path),
         SelectorKind::Remote => None,
     }?;
@@ -169,6 +172,7 @@ fn worktree_target(
         .clone()
         .or_else(|| stored.map(|workspace| workspace.target.display_name.clone()))
         .unwrap_or_else(|| value.to_owned());
+    // An untrusted PR workspace stays untrusted when reopened by path.
     let trust = stored.map_or(TrustLevel::Trusted, |workspace| workspace.trust);
     Some(ResolvedTarget {
         existing_worktree: Some(worktree.clone()),
@@ -270,6 +274,7 @@ pub fn resolve_new_target(
         .with_details(serde_json::json!({ "branch": branch })));
     }
 
+    // "." means "from here", whatever commit this shell is standing on.
     let base_ref = if from == Some(".") {
         repository
             .current_worktree
@@ -283,6 +288,7 @@ pub fn resolve_new_target(
             .remote
             .as_ref()
             .map(|remote| format!("{remote}/{default_branch}"));
+        // Prefer origin/main over local main: the local one may be stale.
         remote_candidate
             .filter(|candidate| {
                 refs.iter().any(|reference| {
@@ -297,6 +303,7 @@ pub fn resolve_new_target(
         "HEAD".to_owned()
     };
 
+    // --fresh refetches the base so the new branch starts from the remote's latest commit.
     if fresh {
         if let Some(remote) = &repository.remote {
             if let Some(remote_branch) = base_ref.strip_prefix(&format!("{remote}/")) {
@@ -394,6 +401,7 @@ fn closest(needle: &str, candidates: &[String]) -> Vec<String> {
 }
 
 fn similarity(needle: &str, candidate: &str) -> i32 {
+    // Shorter candidates rank higher within a tier, so "main" beats "maintenance".
     if candidate.contains(needle) {
         100 - candidate.len() as i32
     } else if is_subsequence(needle, candidate) {

@@ -99,6 +99,7 @@ pub fn release_shell_session_lease(
     let mut locked = LockedRepository::open(config, repository)?;
     let before = locked.state.leases.len();
     release_session(&mut locked.state, session_id, None);
+    // Skip the write when nothing changed; `acre -` calls this on every hop.
     if locked.state.leases.len() != before {
         locked.save(config)?;
     }

@@ -9,6 +9,7 @@ use crate::model::{CloneMode, EnvironmentSnapshot, EnvironmentState};
 
 pub fn inspect_environment(root: &Path, plan: &EnvironmentPlan) -> Result<EnvironmentSnapshot> {
     let layout = inspect_ignored(root, &plan.cache_roots)?;
+    // Nothing to cache (Go, say) means nothing to wait for: ready by definition.
     let state = if plan.cache_roots.is_empty()
         || (!plan.required_roots.is_empty()
             && plan.required_roots.iter().all(|root| layout.has_cache_root(root)))

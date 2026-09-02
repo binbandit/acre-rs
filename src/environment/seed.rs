@@ -24,6 +24,7 @@ pub fn seed_files_only(
     for relative in files {
         let source = source_root.join(relative);
         let destination = destination_root.join(relative);
+        // Never overwrite what the checkout already has, and never copy a tracked file as a "seed".
         if !source.exists() || destination.exists() || !is_ignored_seed(source_root, relative)? {
             continue;
         }
@@ -32,6 +33,7 @@ pub fn seed_files_only(
         }
         match copy_path(&source, &destination) {
             Ok(()) => seeded.push(relative.clone()),
+            // A partial copy of a secret is worse than none.
             Err(_) => {
                 let _ = remove_path(&destination);
             }
@@ -99,6 +101,7 @@ fn seed_path_hash(target: &Path) -> Result<Option<String>> {
     }
     if metadata.is_file() {
         let mut pieces = Vec::new();
+        // Mode is part of the hash: a chmod on .env is a change worth blocking on.
         pieces.extend_from_slice(format!("file\0{}\0", permission_marker(&metadata)).as_bytes());
         pieces.extend_from_slice(
             &fs::read(target)
@@ -113,6 +116,7 @@ fn seed_path_hash(target: &Path) -> Result<Option<String>> {
             .map_err(|error| AcreError::io(format!("could not read {}", target.display()), error))?
             .filter_map(std::result::Result::ok)
             .collect();
+        // Directory order is filesystem-dependent; sort so the hash is stable.
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let name = entry.file_name().to_string_lossy().into_owned();

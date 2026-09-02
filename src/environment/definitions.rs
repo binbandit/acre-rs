@@ -157,6 +157,7 @@ pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefi
         .map(|value| String::from_utf8_lossy(value))
         .unwrap_or_default();
 
+    // One package manager per repo: lockfile first, then the packageManager field, npm as the fallback.
     if files.contains_key("pnpm-lock.yaml") || package_json.contains("\"packageManager\": \"pnpm") {
         result.push(PNPM);
     } else if files.contains_key("yarn.lock") || package_json.contains("\"packageManager\": \"yarn") {

@@ -30,6 +30,7 @@ pub fn build_environment_plan(
 ) -> Result<EnvironmentPlan> {
     let files = read_files_at_ref(&repository.top_level, reference, ALL_FINGERPRINT_FILES)?;
     let ecosystems = detect_ecosystems(&files);
+    // .acre.json comes from the primary checkout on disk, not from the target commit.
     let overrides = load_repo_config(&repository.top_level)?
         .environment
         .unwrap_or_default();
@@ -59,6 +60,7 @@ pub fn build_environment_plan(
             .chain(overrides.required_roots.iter().cloned()),
     )
     .into_iter()
+    // A required root that isn't also a cache root would demand something we never manage.
     .filter(|root| cache_roots.contains(root))
     .collect::<Vec<_>>();
     let seed_files = unique_paths(
@@ -79,6 +81,7 @@ pub fn build_environment_plan(
             json!([file, sha256(normalized)])
         })
         .collect();
+    // Native modules and build outputs don't survive an OS or Node major change.
     let platform_key = format!(
         "{}:{}:{}:{}",
         std::env::consts::OS,
@@ -116,6 +119,7 @@ fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
     let Some(object) = parsed.as_object() else {
         return content.to_vec();
     };
+    // Only the keys that change what an install produces; editing scripts.test shouldn't invalidate caches.
     let mut relevant = Map::new();
     for key in [
         "packageManager",
@@ -137,6 +141,7 @@ fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
     }
     if let Some(scripts) = object.get("scripts").and_then(Value::as_object) {
         let mut install_scripts = Map::new();
+        // Lifecycle scripts run during install, so they do shape node_modules.
         for key in ["preinstall", "install", "postinstall", "prepare"] {
             if let Some(value) = scripts.get(key) {
                 install_scripts.insert(key.to_owned(), canonical(value));
@@ -152,6 +157,7 @@ fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
 fn canonical(value: &Value) -> Value {
     match value {
         Value::Array(values) => Value::Array(values.iter().map(canonical).collect()),
+        // Key order is noise; sort so equivalent manifests hash the same.
         Value::Object(object) => {
             let sorted: BTreeMap<String, Value> = object
                 .iter()

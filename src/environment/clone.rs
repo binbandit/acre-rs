@@ -40,6 +40,7 @@ pub fn seed_environment(
     for cache_root in inspect_ignored(source_root, &plan.cache_roots)?.cache_roots {
         let source = source_root.join(&cache_root);
         let destination = destination_root.join(&cache_root);
+        // The destination may hold a stale cache from a previous generation.
         remove_path(&destination)?;
         if let Some(parent) = destination.parent() {
             ensure_directory(parent)?;
@@ -47,6 +48,7 @@ pub fn seed_environment(
         let report = clone_tree(&source, &destination)?;
         cloned_files += report.files;
         cloned_bytes += report.bytes;
+        // Copy is sticky: one plain copy means the result is not honestly a reflink.
         clone_mode = match (clone_mode, report.mode) {
             (_, CloneMode::Copy) => CloneMode::Copy,
             (CloneMode::None, CloneMode::Reflink) => CloneMode::Reflink,
@@ -94,6 +96,7 @@ pub fn clone_tree(source: &Path, destination: &Path) -> Result<CloneReport> {
     if let Some(report) = clone_with_platform_tool(source, destination) {
         return Ok(report);
     }
+    // Optimistic: the first file that has to be copied flips it to Copy.
     let mut report = CloneReport {
         mode: CloneMode::Reflink,
         files: 0,
@@ -107,10 +110,12 @@ fn clone_with_platform_tool(source: &Path, destination: &Path) -> Option<CloneRe
     let source_text = source.display().to_string();
     let destination_text = destination.display().to_string();
     let (program, args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
+        // Apple's cp clones on APFS; the absolute path sidesteps a GNU cp earlier on PATH that lacks -c.
         ("/bin/cp", vec!["-cR", &source_text, &destination_text])
     } else if cfg!(target_os = "linux") {
         (
             "cp",
+            // always, not auto: a silent fallback to copying would misreport the mode.
             vec!["-a", "--reflink=always", &source_text, &destination_text],
         )
     } else {
@@ -130,6 +135,7 @@ fn clone_with_platform_tool(source: &Path, destination: &Path) -> Option<CloneRe
             bytes: 0,
         }),
         Err(_) => {
+            // Start the fallback from a clean slate rather than on top of a half-finished clone.
             let _ = remove_path(destination);
             None
         }
@@ -185,6 +191,7 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
     }
     #[cfg(windows)]
     {
+        // Windows needs to know whether the link points at a directory to recreate it.
         let followed = fs::metadata(source).ok();
         let result = if followed.as_ref().is_some_and(|metadata| metadata.is_dir()) {
             std::os::windows::fs::symlink_dir(&target, destination)

@@ -93,6 +93,7 @@ pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Resu
         .filter(|slot| slot.status == WorkspaceStatus::Idle)
         .cloned()
         .collect::<Vec<_>>();
+    // Newest first, so the first max_slots survive the cut.
     idle.sort_by(|left, right| right.last_used_at.cmp(&left.last_used_at));
     let retained = idle
         .iter()
@@ -102,12 +103,14 @@ pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Resu
     let retention_ms = u128::from(config.pool.idle_retention_days) * 24 * 60 * 60 * 1000;
     let candidates = idle
         .into_iter()
+        // Overflow goes regardless of age; retained slots go only once stale.
         .filter(|slot| !retained.contains(&slot.id) || age_millis(&slot.last_used_at) > retention_ms)
         .collect::<Vec<_>>();
     let mut removed = Vec::new();
     let mut skipped = Vec::new();
     for slot in candidates {
         match read_status(&slot.path) {
+            // Data retention wins: a dirty slot is somebody's work, whatever our records say.
             Ok(status) if status.dirty => skipped.push(GcSkipped {
                 slot,
                 reason: "slot is dirty".to_owned(),
