@@ -13,8 +13,6 @@ use crate::ui::errors::render_failure;
     name = "acre",
     version = crate::VERSION,
     about = "Warm, reusable Git workspaces. Every branch, already ready.",
-    subcommand_negates_reqs = true,
-    args_conflicts_with_subcommands = true,
     after_help = "Daily use:\n  acre                  choose existing work\n  acre <target>         open an existing worktree, branch, remote branch, or PR\n  acre new <branch>     create a branch in a warm workspace\n  acre -                return to the previous exact location\n  acre done             finish with the current workspace\n  acre <target> -- CMD  run a command in an existing target\n\nAcre never runs repository setup scripts automatically and never recycles dirty or unverified work."
 )]
 struct Cli {
@@ -212,6 +210,15 @@ impl From<CliShell> for SupportedShell {
 
 pub fn run() -> i32 {
     let cli = Cli::parse();
+    if cli.target.is_some() && cli.command.is_some() {
+        use clap::CommandFactory;
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "a target cannot be combined with a subcommand",
+            )
+            .exit();
+    }
     let context = match create_context(&cli) {
         Ok(context) => context,
         Err(error) => {
