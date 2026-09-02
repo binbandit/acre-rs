@@ -60,11 +60,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         })?
     };
 
-    let workspace = state
-        .workspaces
-        .iter()
-        .find(|workspace| canonical_or_absolute(&workspace.path) == canonical_or_absolute(&target_path))
-        .cloned();
+    let workspace = state.workspace_at(&target_path).cloned();
     if repository
         .worktree_at(&target_path)
         .is_some_and(|worktree| worktree.is_main)
