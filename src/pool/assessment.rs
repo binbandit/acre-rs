@@ -3,7 +3,6 @@ use crate::environment::roots::inspect_ignored;
 use crate::environment::seed::changed_seed_files;
 use crate::error::Result;
 use crate::git::status::{in_progress_operation, read_status};
-use crate::git::worktrees::find_worktree_by_path;
 use crate::model::{AcreConfig, DoneAssessment, Repository, RepositoryState, WorkspaceRecord};
 use crate::pool::process::find_processes_using_path;
 
@@ -23,7 +22,7 @@ pub fn assess_workspace(
 ) -> Result<DoneAssessment> {
     let status = read_status(&workspace.path)?;
     let operation = in_progress_operation(&workspace.path)?;
-    let registered = find_worktree_by_path(&repository.worktrees, &workspace.path);
+    let registered = repository.worktree_at(&workspace.path);
     let cache_roots = match &workspace.environment {
         Some(environment) => environment.cache_roots.clone(),
         // A recovered workspace carries no snapshot, so derive its approved roots from its checkout.

@@ -1,9 +1,11 @@
+//! The Git mutations Acre performs: worktree lifecycle, branch binding, fetches.
+
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::error::{AcreError, Result, exit, fail};
-use crate::git::runner::{RunOptions, decode_stdout, run_git_with};
+use crate::error::{AcreError, Result, exit};
+use crate::git::runner::{ProcessResult, RunOptions, decode_stdout, run_git_with};
 use crate::model::{Repository, ResolvedTarget, StoredTarget, TargetKind};
 use crate::util::ensure_directory;
 
@@ -14,25 +16,12 @@ pub fn create_detached_worktree(repository: &Repository, target_path: &Path, ref
         ensure_directory(parent)?;
     }
     if target_path.exists() {
-        return Err(AcreError::new(
-            "ACRE_PATH_EXISTS",
-            format!("The workspace path already exists: {}", target_path.display()),
-            exit::CONFLICT,
-        ));
+        return Err(path_exists(target_path));
     }
-    run_git_with(
+    let path = target_path.display().to_string();
+    git(
         &repository.top_level,
-        vec![
-            "worktree".into(),
-            "add".into(),
-            "--detach".into(),
-            target_path.display().to_string(),
-            reference.into(),
-        ],
-        RunOptions {
-            timeout: Some(GIT_TIMEOUT),
-            ..RunOptions::default()
-        },
+        &["worktree", "add", "--detach", &path, reference],
     )?;
     Ok(())
 }
@@ -42,20 +31,13 @@ pub fn move_worktree(repository: &Repository, from: &Path, to: &Path) -> Result<
         ensure_directory(parent)?;
     }
     if to.exists() {
-        return Err(AcreError::new(
-            "ACRE_PATH_EXISTS",
-            format!("The workspace path already exists: {}", to.display()),
-            exit::CONFLICT,
-        ));
+        return Err(path_exists(to));
     }
+    let from_text = from.display().to_string();
+    let to_text = to.display().to_string();
     let moved = run_git_with(
         &repository.top_level,
-        vec![
-            "worktree".into(),
-            "move".into(),
-            from.display().to_string(),
-            to.display().to_string(),
-        ],
+        &["worktree", "move", &from_text, &to_text],
         RunOptions {
             timeout: Some(GIT_TIMEOUT),
             accepted_statuses: &[0, 1, 128],
@@ -66,134 +48,88 @@ pub fn move_worktree(repository: &Repository, from: &Path, to: &Path) -> Result<
         return Ok(());
     }
     if !from.exists() {
-        return fail(
+        return Err(AcreError::new(
             "ACRE_WORKTREE_MOVE_FAILED",
             format!("Acre could not move {}.", from.display()),
             exit::GIT,
-        );
+        ));
     }
+    // Git refused (typically a locked worktree); move the directory and let Git re-link it.
     fs::rename(from, to).map_err(|error| AcreError::io("could not move worktree directory", error))?;
-    run_git_with(
-        &repository.top_level,
-        vec!["worktree".into(), "repair".into(), to.display().to_string()],
-        RunOptions {
-            timeout: Some(GIT_TIMEOUT),
-            ..RunOptions::default()
-        },
-    )?;
+    git(&repository.top_level, &["worktree", "repair", &to_text])?;
     Ok(())
 }
 
 pub fn bind_target(repository: &Repository, workspace_path: &Path, target: &ResolvedTarget) -> Result<()> {
     match target.kind {
         TargetKind::NewBranch => {
-            let branch = target.local_branch.as_deref().ok_or_else(|| {
-                AcreError::new(
-                    "ACRE_TARGET_INVALID",
-                    "New branch target is incomplete.",
-                    exit::INTERNAL,
-                )
-            })?;
-            git_switch(workspace_path, &["switch", "--create", branch, &target.oid])?;
+            let branch = required(target.local_branch.as_deref(), "New branch")?;
+            git(workspace_path, &["switch", "--create", branch, &target.oid])?;
         }
         TargetKind::LocalBranch => {
-            let branch = target.local_branch.as_deref().ok_or_else(|| {
-                AcreError::new(
-                    "ACRE_TARGET_INVALID",
-                    "Local branch target is incomplete.",
-                    exit::INTERNAL,
-                )
-            })?;
-            git_switch(workspace_path, &["switch", branch])?;
+            let branch = required(target.local_branch.as_deref(), "Local branch")?;
+            git(workspace_path, &["switch", branch])?;
         }
         TargetKind::RemoteBranch => {
-            let branch = target.local_branch.as_deref().ok_or_else(|| {
-                AcreError::new(
-                    "ACRE_TARGET_INVALID",
-                    "Remote branch target is incomplete.",
-                    exit::INTERNAL,
-                )
-            })?;
-            let remote_branch = target.remote_branch.as_deref().ok_or_else(|| {
-                AcreError::new(
-                    "ACRE_TARGET_INVALID",
-                    "Remote branch target is incomplete.",
-                    exit::INTERNAL,
-                )
-            })?;
-            git_switch(workspace_path, &["switch", "--create", branch, &target.oid])?;
-            git_switch(
+            let branch = required(target.local_branch.as_deref(), "Remote branch")?;
+            let remote_branch = required(target.remote_branch.as_deref(), "Remote branch")?;
+            git(workspace_path, &["switch", "--create", branch, &target.oid])?;
+            git(
                 workspace_path,
                 &["branch", "--set-upstream-to", remote_branch, branch],
             )?;
         }
-        TargetKind::PullRequest => git_switch(workspace_path, &["switch", "--detach", &target.oid])?,
+        TargetKind::PullRequest => {
+            git(workspace_path, &["switch", "--detach", &target.oid])?;
+        }
         TargetKind::Worktree => {
-            return fail(
+            return Err(AcreError::new(
                 "ACRE_TARGET_INVALID",
                 "An existing worktree does not need to be bound.",
                 exit::INTERNAL,
-            );
+            ));
         }
     }
     verify_bound_head(repository, workspace_path, target)
 }
 
 pub fn restore_stored_target(workspace_path: &Path, target: &StoredTarget) -> Result<()> {
-    if let Some(branch) = target.local_branch.as_deref() {
-        git_switch(workspace_path, &["switch", branch])
-    } else {
-        git_switch(workspace_path, &["switch", "--detach", &target.oid])
-    }
+    match target.local_branch.as_deref() {
+        Some(branch) => git(workspace_path, &["switch", branch])?,
+        None => git(workspace_path, &["switch", "--detach", &target.oid])?,
+    };
+    Ok(())
 }
 
 pub fn detach_workspace(workspace_path: &Path) -> Result<()> {
-    git_switch(workspace_path, &["switch", "--detach"])
+    git(workspace_path, &["switch", "--detach"])?;
+    Ok(())
 }
 
 pub fn reset_workspace(workspace_path: &Path, oid: &str) -> Result<()> {
-    git_switch(workspace_path, &["reset", "--hard", oid])?;
-    git_switch(workspace_path, &["switch", "--detach", oid])
+    git(workspace_path, &["reset", "--hard", oid])?;
+    git(workspace_path, &["switch", "--detach", oid])?;
+    Ok(())
 }
 
 pub fn remove_worktree(repository: &Repository, target_path: &Path, force: bool) -> Result<()> {
-    let mut args = vec!["worktree".into(), "remove".into()];
+    let path = target_path.display().to_string();
+    let mut args = vec!["worktree", "remove"];
     if force {
-        args.push("--force".into());
+        args.push("--force");
     }
-    args.push(target_path.display().to_string());
-    run_git_with(
-        &repository.top_level,
-        args,
-        RunOptions {
-            timeout: Some(GIT_TIMEOUT),
-            ..RunOptions::default()
-        },
-    )?;
+    args.push(&path);
+    git(&repository.top_level, &args)?;
     Ok(())
 }
 
 pub fn prune_worktrees(repository: &Repository) -> Result<()> {
-    run_git_with(
-        &repository.top_level,
-        vec!["worktree".into(), "prune".into()],
-        RunOptions {
-            timeout: Some(GIT_TIMEOUT),
-            ..RunOptions::default()
-        },
-    )?;
+    git(&repository.top_level, &["worktree", "prune"])?;
     Ok(())
 }
 
 pub fn repair_worktrees(repository: &Repository) -> Result<()> {
-    run_git_with(
-        &repository.top_level,
-        vec!["worktree".into(), "repair".into()],
-        RunOptions {
-            timeout: Some(GIT_TIMEOUT),
-            ..RunOptions::default()
-        },
-    )?;
+    git(&repository.top_level, &["worktree", "repair"])?;
     Ok(())
 }
 
@@ -203,13 +139,13 @@ pub fn fetch_ref(
     source: &str,
     destination: Option<&str>,
 ) -> Result<()> {
-    let refspec = destination.map_or_else(
-        || source.to_owned(),
-        |destination| format!("+{source}:{destination}"),
-    );
+    let refspec = match destination {
+        Some(destination) => format!("+{source}:{destination}"),
+        None => source.to_owned(),
+    };
     run_git_with(
         &repository.top_level,
-        vec!["fetch".into(), "--no-tags".into(), remote.into(), refspec],
+        &["fetch", "--no-tags", remote, &refspec],
         RunOptions {
             timeout: Some(Duration::from_secs(180)),
             ..RunOptions::default()
@@ -218,15 +154,11 @@ pub fn fetch_ref(
     Ok(())
 }
 
+/// Deletes a branch only while it still points at `expected_oid`; returns whether it did.
 pub fn delete_branch_if_expected(repository: &Repository, branch: &str, expected_oid: &str) -> Result<bool> {
     let result = run_git_with(
         &repository.top_level,
-        vec![
-            "update-ref".into(),
-            "-d".into(),
-            format!("refs/heads/{branch}"),
-            expected_oid.into(),
-        ],
+        &["update-ref", "-d", &format!("refs/heads/{branch}"), expected_oid],
         RunOptions {
             timeout: Some(GIT_TIMEOUT),
             accepted_statuses: &[0, 1, 128],
@@ -236,22 +168,39 @@ pub fn delete_branch_if_expected(repository: &Repository, branch: &str, expected
     Ok(result.status == 0)
 }
 
-fn git_switch(cwd: &Path, args: &[&str]) -> Result<()> {
+fn git(cwd: &Path, args: &[&str]) -> Result<ProcessResult> {
     run_git_with(
         cwd,
-        args.iter().map(|value| (*value).to_owned()).collect(),
+        args,
         RunOptions {
             timeout: Some(GIT_TIMEOUT),
             ..RunOptions::default()
         },
-    )?;
-    Ok(())
+    )
+}
+
+fn required<'a>(value: Option<&'a str>, kind: &str) -> Result<&'a str> {
+    value.ok_or_else(|| {
+        AcreError::new(
+            "ACRE_TARGET_INVALID",
+            format!("{kind} target is incomplete."),
+            exit::INTERNAL,
+        )
+    })
+}
+
+fn path_exists(path: &Path) -> AcreError {
+    AcreError::new(
+        "ACRE_PATH_EXISTS",
+        format!("The workspace path already exists: {}", path.display()),
+        exit::CONFLICT,
+    )
 }
 
 fn verify_bound_head(repository: &Repository, workspace_path: &Path, target: &ResolvedTarget) -> Result<()> {
     let actual = decode_stdout(&run_git_with(
         workspace_path,
-        vec!["rev-parse".into(), "HEAD".into()],
+        &["rev-parse", "HEAD"],
         RunOptions {
             timeout: Some(Duration::from_secs(30)),
             ..RunOptions::default()

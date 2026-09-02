@@ -17,9 +17,9 @@ pub fn read_files_at_ref(cwd: &Path, reference: &str, files: &[&str]) -> Result<
     }
     let result = run_git_with(
         cwd,
-        vec!["cat-file".into(), "--batch".into()],
+        &["cat-file", "--batch"],
         RunOptions {
-            stdin: Some(input.as_bytes()),
+            stdin: Some(input.into_bytes()),
             ..RunOptions::default()
         },
     )?;

@@ -4,14 +4,12 @@ use std::path::Path;
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::fetch_ref;
 use crate::git::refs::{list_refs, resolve_oid, validate_branch_name};
-use crate::git::worktrees::find_worktree_by_path;
 use crate::model::{
     GitRefKind, Repository, RepositoryState, ResolvedTarget, StoredTarget, TargetKind, TrustLevel,
 };
 use crate::provider::github::{
     ensure_pull_request_object, parse_pull_request_selector, resolve_pull_request,
 };
-use crate::state::repository::find_workspace_by_path;
 use crate::util::{canonical_or_absolute, is_subsequence};
 
 pub fn resolve_existing_target(
@@ -32,7 +30,7 @@ pub fn resolve_existing_target(
                         .as_ref()
                         .is_some_and(|pull_request| pull_request.number == number)
             }) {
-                if let Some(worktree) = find_worktree_by_path(&repository.worktrees, &existing.path) {
+                if let Some(worktree) = repository.worktree_at(&existing.path) {
                     let mut target = from_stored(&existing.target, existing.trust);
                     target.kind = TargetKind::Worktree;
                     target.existing_worktree = Some(worktree.clone());
@@ -71,7 +69,7 @@ pub fn resolve_existing_target(
                     && canonical_or_absolute(&worktree.path) == canonical_or_absolute(path_value))
         }
     }) {
-        let stored = find_workspace_by_path(state, &worktree.path);
+        let stored = state.workspace_at(&worktree.path);
         return Ok(ResolvedTarget {
             kind: TargetKind::Worktree,
             display_name: worktree

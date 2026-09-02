@@ -64,17 +64,16 @@ pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<P
     let result = run_process(
         "gh",
         &[
-            "pr".into(),
-            "view".into(),
-            selector.into(),
-            "--repo".into(),
-            repo_slug.clone(),
-            "--json".into(),
-            "number,title,author,url,baseRefName,headRefName,headRefOid,isCrossRepository,headRepository"
-                .into(),
+            "pr",
+            "view",
+            selector,
+            "--repo",
+            &repo_slug,
+            "--json",
+            "number,title,author,url,baseRefName,headRefName,headRefOid,isCrossRepository,headRepository",
         ],
         RunOptions {
-            cwd: Some(&repository.top_level),
+            cwd: Some(repository.top_level.clone()),
             timeout: Some(std::time::Duration::from_secs(60)),
             ..RunOptions::default()
         },

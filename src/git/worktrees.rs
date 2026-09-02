@@ -93,13 +93,6 @@ pub fn with_existence(mut worktrees: Vec<GitWorktree>) -> Vec<GitWorktree> {
     worktrees
 }
 
-pub fn find_worktree_by_path<'a>(worktrees: &'a [GitWorktree], path: &Path) -> Option<&'a GitWorktree> {
-    let path = canonical_or_absolute(path);
-    worktrees
-        .iter()
-        .find(|worktree| canonical_or_absolute(&worktree.path) == path)
-}
-
 pub fn find_current_worktree(worktrees: &[GitWorktree], cwd: &Path) -> Option<GitWorktree> {
     let cwd = canonical_or_absolute(cwd);
     let mut candidates = worktrees.to_vec();

@@ -2,12 +2,9 @@ use std::collections::BTreeSet;
 
 use crate::error::Result;
 use crate::git::operations::{prune_worktrees, remove_worktree, repair_worktrees};
-use crate::git::repository::discover_repository;
 use crate::git::status::read_status;
 use crate::model::{AcreConfig, Repository, RepositoryState, WorkspaceSlot, WorkspaceStatus};
-use crate::state::lock::RepositoryLock;
-use crate::state::paths::repository_lock_path;
-use crate::state::repository::{load_repository_state, save_repository_state, stored_repository_state};
+use crate::state::repository::{LockedRepository, save_repository_state, stored_repository_state};
 use crate::util::{age_millis, canonical_or_absolute};
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -35,13 +32,14 @@ pub struct GcReport {
 }
 
 pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repository) -> Result<RepairReport> {
-    let _lock = RepositoryLock::acquire(&repository_lock_path(config, repository_input))?;
+    // Git's own locking covers these; Acre's lock is for the state that gets rebuilt below.
     let _ = prune_worktrees(repository_input);
     let _ = repair_worktrees(repository_input);
-    let repository = discover_repository(&repository_input.top_level)?;
+    let locked = LockedRepository::open(config, repository_input)?;
+    let repository = &locked.repository;
     // Loading recovers unregistered Acre worktrees, so anything absent from the persisted
     // state afterwards was recovered by this repair.
-    let stored = stored_repository_state(config, &repository);
+    let stored = stored_repository_state(config, repository);
     let known_slots: BTreeSet<&str> = stored
         .iter()
         .flat_map(|state| state.slots.iter().map(|slot| slot.id.as_str()))
@@ -50,7 +48,7 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
         .iter()
         .flat_map(|state| state.workspaces.iter().map(|workspace| workspace.id.as_str()))
         .collect();
-    let mut state = load_repository_state(config, &repository)?;
+    let mut state = locked.state.clone();
     let registered: BTreeSet<_> = repository
         .worktrees
         .iter()
@@ -74,7 +72,7 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
         .iter()
         .filter(|workspace| !known_workspaces.contains(workspace.id.as_str()))
         .count();
-    save_repository_state(config, &repository, &state)?;
+    save_repository_state(config, repository, &state)?;
     Ok(RepairReport {
         added_slots,
         added_workspaces,
@@ -84,10 +82,9 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
 }
 
 pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Result<GcReport> {
-    let _lock = RepositoryLock::acquire(&repository_lock_path(config, repository_input))?;
-    let repository = discover_repository(&repository_input.top_level)?;
-    let mut state = load_repository_state(config, &repository)?;
-    let mut idle = state
+    let mut locked = LockedRepository::open(config, repository_input)?;
+    let mut idle = locked
+        .state
         .slots
         .iter()
         .filter(|slot| slot.status == WorkspaceStatus::Idle)
@@ -112,7 +109,7 @@ pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Resu
                 slot,
                 reason: "slot is dirty".to_owned(),
             }),
-            Ok(_) => match remove_worktree(&repository, &slot.path, false) {
+            Ok(_) => match remove_worktree(&locked.repository, &slot.path, false) {
                 Ok(()) => removed.push(slot),
                 Err(error) => skipped.push(GcSkipped {
                     slot,
@@ -129,11 +126,14 @@ pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Resu
         .iter()
         .map(|slot| slot.id.as_str())
         .collect::<BTreeSet<_>>();
-    state.slots.retain(|slot| !removed_ids.contains(slot.id.as_str()));
-    save_repository_state(config, &repository, &state)?;
+    locked
+        .state
+        .slots
+        .retain(|slot| !removed_ids.contains(slot.id.as_str()));
+    locked.save(config)?;
     Ok(GcReport {
         removed,
         skipped,
-        state,
+        state: locked.state,
     })
 }

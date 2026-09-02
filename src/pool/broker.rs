@@ -14,7 +14,6 @@ use crate::git::operations::{
     remove_worktree, reset_workspace, restore_stored_target,
 };
 use crate::git::repository::discover_repository;
-use crate::git::worktrees::find_worktree_by_path;
 use crate::model::{
     AcreConfig, DoneAssessment, EnvironmentPlan, EnvironmentSnapshot, EnvironmentState,
     MaterializedWorkspace, Repository, RepositoryState, ResolvedTarget, ShellBridge, StoredTarget,
@@ -25,9 +24,7 @@ use crate::state::index::remember_repository;
 use crate::state::leases::{AcquireLease, acquire_lease, release_lease, release_session_lease};
 use crate::state::lock::RepositoryLock;
 use crate::state::paths::{active_root, repository_lock_path, slots_root};
-use crate::state::repository::{
-    find_workspace_by_path, find_workspace_for_target, load_repository_state, save_repository_state,
-};
+use crate::state::repository::{load_repository_state, save_repository_state};
 use crate::util::{
     branch_slug, canonical_or_absolute, ensure_directory, now_iso, random_short, remove_path, short_hash,
 };
@@ -85,7 +82,8 @@ pub fn materialize_workspace(
 
     let result = (|| -> Result<MaterializedWorkspace> {
         if let Some(existing_worktree) = &target.existing_worktree {
-            let workspace = find_workspace_by_path(&state, &existing_worktree.path)
+            let workspace = state
+                .workspace_at(&existing_worktree.path)
                 .cloned()
                 .unwrap_or_else(|| {
                     let workspace = external_workspace(&repository, target, &existing_worktree.path);
@@ -108,7 +106,7 @@ pub fn materialize_workspace(
         }
 
         let stored_target = StoredTarget::from(target);
-        if let Some(active) = find_workspace_for_target(&state, &stored_target).cloned() {
+        if let Some(active) = state.workspace_for_target(&stored_target).cloned() {
             if active.path.exists() {
                 if target.kind == crate::model::TargetKind::NewBranch {
                     return Err(AcreError::new(
@@ -404,7 +402,7 @@ pub fn return_workspace(
         });
     }
 
-    let registered = find_worktree_by_path(&repository.worktrees, &workspace.path).ok_or_else(|| {
+    let registered = repository.worktree_at(&workspace.path).ok_or_else(|| {
         AcreError::new(
             "ACRE_WORKTREE_MISSING",
             "Git no longer knows about this Acre workspace.",
@@ -517,7 +515,7 @@ pub fn lease_workspace_by_path(
     let _lock = RepositoryLock::acquire(&repository_lock_path(config, repository_input))?;
     let repository = discover_repository(&repository_input.top_level)?;
     let mut state = load_repository_state(config, &repository)?;
-    let Some(workspace) = find_workspace_by_path(&state, workspace_path).cloned() else {
+    let Some(workspace) = state.workspace_at(workspace_path).cloned() else {
         return Ok(None);
     };
     let lease = attach_lease(&mut state, &workspace, Some(request));
@@ -598,7 +596,8 @@ fn select_slot(
         .iter()
         .filter(|slot| {
             slot.status == WorkspaceStatus::Idle
-                && find_worktree_by_path(&repository.worktrees, &slot.path)
+                && repository
+                    .worktree_at(&slot.path)
                     .is_some_and(|worktree| worktree.exists)
         })
         .cloned()

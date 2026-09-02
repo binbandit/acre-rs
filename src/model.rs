@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum SupportedShell {
     Bash,
@@ -35,16 +35,6 @@ pub struct CommandContext {
     pub interactive: bool,
     pub global: GlobalOptions,
     pub shell: ShellBridge,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProcessResult {
-    pub argv: Vec<String>,
-    pub cwd: Option<PathBuf>,
-    pub status: i32,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    pub duration_ms: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,7 +156,7 @@ impl From<&ResolvedTarget> for StoredTarget {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct EcosystemDefinition {
     pub id: &'static str,
     pub label: &'static str,

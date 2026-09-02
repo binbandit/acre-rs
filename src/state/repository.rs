@@ -2,13 +2,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
+use crate::git::repository::discover_repository;
 use crate::model::{
     AcreConfig, GitWorktree, Repository, RepositoryState, StoredTarget, TrustLevel, WorkspaceOwnership,
     WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
 };
-use crate::state::lock::is_pid_alive;
-use crate::state::paths::{active_root, repository_state_path, slots_root};
-use crate::util::{is_inside, now_iso, random_short, read_json, short_hash, write_json};
+use crate::state::lock::{RepositoryLock, is_pid_alive};
+use crate::state::paths::{active_root, repository_lock_path, repository_state_path, slots_root};
+use crate::util::{
+    canonical_or_absolute, is_inside, now_iso, random_short, read_json, short_hash, write_json,
+};
 
 pub fn load_repository_state(config: &AcreConfig, repository: &Repository) -> Result<RepositoryState> {
     let state = match stored_repository_state(config, repository) {
@@ -49,21 +52,21 @@ pub fn empty_state(repository: &Repository) -> RepositoryState {
     }
 }
 
-pub fn reconcile_state(mut state: RepositoryState, worktrees: &[GitWorktree]) -> RepositoryState {
+fn reconcile_state(mut state: RepositoryState, worktrees: &[GitWorktree]) -> RepositoryState {
     let registered: BTreeMap<PathBuf, &GitWorktree> = worktrees
         .iter()
-        .map(|worktree| (crate::util::canonical_or_absolute(&worktree.path), worktree))
+        .map(|worktree| (canonical_or_absolute(&worktree.path), worktree))
         .collect();
 
     for workspace in &mut state.workspaces {
-        let path = crate::util::canonical_or_absolute(&workspace.path);
+        let path = canonical_or_absolute(&workspace.path);
         match registered.get(&path) {
             Some(worktree) if worktree.exists && !worktree.prunable => {}
             _ => workspace.status = WorkspaceStatus::Broken,
         }
     }
     for slot in &mut state.slots {
-        let path = crate::util::canonical_or_absolute(&slot.path);
+        let path = canonical_or_absolute(&slot.path);
         match registered.get(&path) {
             Some(worktree) if worktree.exists && !worktree.prunable => {}
             _ => slot.status = WorkspaceStatus::Broken,
@@ -83,35 +86,56 @@ pub fn reconcile_state(mut state: RepositoryState, worktrees: &[GitWorktree]) ->
     state
 }
 
-pub fn find_workspace_by_path<'a>(
-    state: &'a RepositoryState,
-    target_path: &Path,
-) -> Option<&'a WorkspaceRecord> {
-    let target_path = crate::util::canonical_or_absolute(target_path);
-    state
-        .workspaces
-        .iter()
-        .find(|workspace| crate::util::canonical_or_absolute(&workspace.path) == target_path)
+impl RepositoryState {
+    /// The active workspace at `path`, compared after canonicalization.
+    pub fn workspace_at(&self, path: &Path) -> Option<&WorkspaceRecord> {
+        let path = canonical_or_absolute(path);
+        self.workspaces
+            .iter()
+            .find(|workspace| canonical_or_absolute(&workspace.path) == path)
+    }
+
+    /// The usable workspace already bound to `target`, if any.
+    pub fn workspace_for_target(&self, target: &StoredTarget) -> Option<&WorkspaceRecord> {
+        self.workspaces.iter().find(|workspace| {
+            if workspace.status == WorkspaceStatus::Broken {
+                return false;
+            }
+            if let Some(pull_request) = &target.pull_request {
+                return workspace.target.pull_request.as_ref().is_some_and(|candidate| {
+                    candidate.number == pull_request.number && candidate.repository == pull_request.repository
+                });
+            }
+            if let Some(local_branch) = &target.local_branch {
+                return workspace.target.local_branch.as_ref() == Some(local_branch);
+            }
+            workspace.target.kind == target.kind && workspace.target.oid == target.oid
+        })
+    }
 }
 
-pub fn find_workspace_for_target<'a>(
-    state: &'a RepositoryState,
-    target: &StoredTarget,
-) -> Option<&'a WorkspaceRecord> {
-    state.workspaces.iter().find(|workspace| {
-        if workspace.status == WorkspaceStatus::Broken {
-            return false;
-        }
-        if let Some(pull_request) = &target.pull_request {
-            return workspace.target.pull_request.as_ref().is_some_and(|candidate| {
-                candidate.number == pull_request.number && candidate.repository == pull_request.repository
-            });
-        }
-        if let Some(local_branch) = &target.local_branch {
-            return workspace.target.local_branch.as_ref() == Some(local_branch);
-        }
-        workspace.target.kind == target.kind && workspace.target.oid == target.oid
-    })
+/// Exclusive access to a repository: the lock, Git's current view, and the state loaded under it.
+pub struct LockedRepository {
+    pub repository: Repository,
+    pub state: RepositoryState,
+    _lock: RepositoryLock,
+}
+
+impl LockedRepository {
+    pub fn open(config: &AcreConfig, repository: &Repository) -> Result<Self> {
+        let lock = RepositoryLock::acquire(&repository_lock_path(config, repository))?;
+        let repository = discover_repository(&repository.top_level)?;
+        let state = load_repository_state(config, &repository)?;
+        Ok(Self {
+            repository,
+            state,
+            _lock: lock,
+        })
+    }
+
+    pub fn save(&self, config: &AcreConfig) -> Result<()> {
+        save_repository_state(config, &self.repository, &self.state)
+    }
 }
 
 fn recover_owned_worktrees(
@@ -122,17 +146,17 @@ fn recover_owned_worktrees(
     let slot_paths: BTreeSet<PathBuf> = state
         .slots
         .iter()
-        .map(|slot| crate::util::canonical_or_absolute(&slot.path))
+        .map(|slot| canonical_or_absolute(&slot.path))
         .collect();
     let workspace_paths: BTreeSet<PathBuf> = state
         .workspaces
         .iter()
-        .map(|workspace| crate::util::canonical_or_absolute(&workspace.path))
+        .map(|workspace| canonical_or_absolute(&workspace.path))
         .collect();
     let timestamp = now_iso();
 
     for worktree in &repository.worktrees {
-        let path = crate::util::canonical_or_absolute(&worktree.path);
+        let path = canonical_or_absolute(&worktree.path);
         if is_inside(&slots_root(config, repository), &path) && !slot_paths.contains(&path) {
             state.slots.push(WorkspaceSlot {
                 id: path

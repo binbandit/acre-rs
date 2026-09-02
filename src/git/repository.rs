@@ -2,24 +2,34 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::error::{AcreError, Result, exit, fail};
+use crate::error::{AcreError, Result, exit};
 use crate::git::runner::{RunOptions, run_git_with, run_process};
 use crate::git::worktrees::{
     find_current_worktree, list_worktrees, parse_worktree_porcelain, with_existence,
 };
-use crate::model::Repository;
-use crate::util::{parse_hosted_remote, short_hash};
+use crate::model::{GitWorktree, Repository};
+use crate::util::{canonical_or_absolute, parse_hosted_remote, short_hash};
+
+impl Repository {
+    /// The registered worktree at `path`, compared after canonicalization.
+    pub fn worktree_at(&self, path: &Path) -> Option<&GitWorktree> {
+        let path = canonical_or_absolute(path);
+        self.worktrees
+            .iter()
+            .find(|worktree| canonical_or_absolute(&worktree.path) == path)
+    }
+}
 
 pub fn discover_repository(cwd: &Path) -> Result<Repository> {
     let result = run_git_with(
         cwd,
-        vec![
-            "rev-parse".into(),
-            "--path-format=absolute".into(),
-            "--show-toplevel".into(),
-            "--git-dir".into(),
-            "--git-common-dir".into(),
-            "--is-inside-work-tree".into(),
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--git-dir",
+            "--git-common-dir",
+            "--is-inside-work-tree",
         ],
         RunOptions {
             accepted_statuses: &[0, 128],
@@ -27,11 +37,11 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
         },
     )?;
     if result.status != 0 {
-        return fail(
+        return Err(AcreError::new(
             "ACRE_NOT_IN_REPOSITORY",
             "This directory is not inside a Git worktree.",
             exit::ENVIRONMENT,
-        );
+        ));
     }
     let text = String::from_utf8_lossy(&result.stdout);
     let lines: Vec<&str> = text.trim().lines().collect();
@@ -97,29 +107,23 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
 }
 
 pub fn discover_repository_from_common_dir(common_dir: &Path) -> Result<Repository> {
-    let args = vec![
-        format!("--git-dir={}", common_dir.display()),
-        "worktree".into(),
-        "list".into(),
-        "--porcelain".into(),
-        "-z".into(),
-    ];
+    let git_dir = format!("--git-dir={}", common_dir.display());
     let parent = common_dir.parent().unwrap_or_else(|| Path::new("."));
     let result = run_process(
         "git",
-        &args,
+        &[&git_dir, "worktree", "list", "--porcelain", "-z"],
         RunOptions {
-            cwd: Some(parent),
+            cwd: Some(parent.to_path_buf()),
             accepted_statuses: &[0, 128],
             ..RunOptions::default()
         },
     )?;
     if result.status != 0 {
-        return fail(
+        return Err(AcreError::new(
             "ACRE_REPOSITORY_UNAVAILABLE",
             "The repository is no longer available.",
             exit::ENVIRONMENT,
-        );
+        ));
     }
     let first = parse_worktree_porcelain(&result.stdout)
         .into_iter()
@@ -143,11 +147,11 @@ struct RepositoryConfigSnapshot {
 fn read_repository_config(cwd: &Path) -> Result<RepositoryConfigSnapshot> {
     let result = run_git_with(
         cwd,
-        vec![
-            "config".into(),
-            "--null".into(),
-            "--get-regexp".into(),
-            "^(remote\\..*\\.url|init\\.defaultBranch)$".into(),
+        &[
+            "config",
+            "--null",
+            "--get-regexp",
+            "^(remote\\..*\\.url|init\\.defaultBranch)$",
         ],
         RunOptions {
             accepted_statuses: &[0, 1],

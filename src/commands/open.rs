@@ -11,7 +11,7 @@ use crate::pool::broker::{
 };
 use crate::shell::navigation::{navigate_direct, navigate_to_materialized};
 use crate::state::config::load_config;
-use crate::state::repository::{find_workspace_by_path, load_repository_state};
+use crate::state::repository::load_repository_state;
 use crate::state::shell::read_shell_state;
 use crate::target::resolve_existing_target;
 use crate::ui::output::Renderer;
@@ -128,7 +128,8 @@ fn picker_rows(
             .branch
             .clone()
             .or_else(|| {
-                find_workspace_by_path(state, &worktree.path)
+                state
+                    .workspace_at(&worktree.path)
                     .map(|workspace| workspace.target.display_name.clone())
             })
             .unwrap_or_else(|| format!("detached {}", &worktree.head[..worktree.head.len().min(8)]));

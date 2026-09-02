@@ -1,5 +1,7 @@
+//! Runs Git and other tools with captured output, timeouts, and uniform error reporting.
+
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -7,17 +9,28 @@ use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
 
 use crate::error::{AcreError, Result, exit};
-use crate::model::ProcessResult;
 
+/// Everything captured from a finished process.
 #[derive(Debug, Clone)]
-pub struct RunOptions<'a> {
-    pub cwd: Option<&'a Path>,
-    pub stdin: Option<&'a [u8]>,
-    pub timeout: Option<Duration>,
-    pub accepted_statuses: &'a [i32],
+pub struct ProcessResult {
+    pub argv: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    pub status: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub duration_ms: u128,
 }
 
-impl<'a> Default for RunOptions<'a> {
+#[derive(Debug, Clone)]
+pub struct RunOptions {
+    pub cwd: Option<PathBuf>,
+    pub stdin: Option<Vec<u8>>,
+    pub timeout: Option<Duration>,
+    /// Exit statuses treated as success; any other status becomes an error.
+    pub accepted_statuses: &'static [i32],
+}
+
+impl Default for RunOptions {
     fn default() -> Self {
         Self {
             cwd: None,
@@ -28,7 +41,7 @@ impl<'a> Default for RunOptions<'a> {
     }
 }
 
-pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -> Result<ProcessResult> {
+pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Result<ProcessResult> {
     let started = Instant::now();
     let mut command = Command::new(executable);
     command
@@ -36,9 +49,10 @@ pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(cwd) = options.cwd {
+    if let Some(cwd) = &options.cwd {
         command.current_dir(cwd);
     }
+    let details = serde_json::json!({ "executable": executable, "args": args });
 
     let mut child = command.spawn().map_err(|error| {
         AcreError::new(
@@ -46,17 +60,14 @@ pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -
             format!("Could not start {executable}: {error}"),
             exit::ENVIRONMENT,
         )
-        .with_details(serde_json::json!({ "executable": executable, "args": args }))
+        .with_details(&details)
     })?;
 
-    if let Some(input) = options.stdin {
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(input)
-                .map_err(|error| AcreError::io(format!("could not write to {executable}"), error))?;
-        }
-    } else {
-        drop(child.stdin.take());
+    // The stdin handle closes as soon as it drops, so the child never waits on us.
+    if let (Some(input), Some(mut stdin)) = (&options.stdin, child.stdin.take()) {
+        stdin
+            .write_all(input)
+            .map_err(|error| AcreError::io(format!("could not write to {executable}"), error))?;
     }
 
     let mut stdout = child.stdout.take().expect("stdout configured as piped");
@@ -72,8 +83,8 @@ pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -
         bytes
     });
 
-    let status = if let Some(timeout) = options.timeout {
-        match child
+    let status = match options.timeout {
+        Some(timeout) => match child
             .wait_timeout(timeout)
             .map_err(|error| AcreError::io(format!("could not wait for {executable}"), error))?
         {
@@ -89,26 +100,24 @@ pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -
                     ),
                     exit::ENVIRONMENT,
                 )
-                .with_details(serde_json::json!({ "executable": executable, "args": args })));
+                .with_details(&details));
             }
-        }
-    } else {
-        child
+        },
+        None => child
             .wait()
-            .map_err(|error| AcreError::io(format!("could not wait for {executable}"), error))?
+            .map_err(|error| AcreError::io(format!("could not wait for {executable}"), error))?,
     };
 
-    let stdout = stdout_thread.join().unwrap_or_default();
-    let stderr = stderr_thread.join().unwrap_or_default();
     let status_code = status.code().unwrap_or(1);
     let result = ProcessResult {
-        argv: std::iter::once(executable.to_owned())
-            .chain(args.iter().cloned())
+        argv: std::iter::once(executable)
+            .chain(args.iter().copied())
+            .map(str::to_owned)
             .collect(),
-        cwd: options.cwd.map(Path::to_path_buf),
+        cwd: options.cwd,
         status: status_code,
-        stdout,
-        stderr,
+        stdout: stdout_thread.join().unwrap_or_default(),
+        stderr: stderr_thread.join().unwrap_or_default(),
         duration_ms: started.elapsed().as_millis(),
     };
 
@@ -120,22 +129,21 @@ pub fn run_process(executable: &str, args: &[String], options: RunOptions<'_>) -
 }
 
 pub fn run_git(cwd: &Path, args: &[&str]) -> Result<ProcessResult> {
-    run_git_with(
-        cwd,
-        args.iter().map(|value| (*value).to_owned()).collect(),
-        RunOptions::default(),
+    run_git_with(cwd, args, RunOptions::default())
+}
+
+pub fn run_git_with(cwd: &Path, args: &[&str], options: RunOptions) -> Result<ProcessResult> {
+    run_process(
+        "git",
+        args,
+        RunOptions {
+            cwd: Some(cwd.to_path_buf()),
+            ..options
+        },
     )
 }
 
-pub fn run_git_with<'a>(
-    cwd: &'a Path,
-    args: Vec<String>,
-    mut options: RunOptions<'a>,
-) -> Result<ProcessResult> {
-    options.cwd = Some(cwd);
-    run_process("git", &args, options)
-}
-
+/// Runs a program with the user's terminal attached, for `acre <target> -- <command>`.
 pub fn run_passthrough(executable: &str, args: &[std::ffi::OsString], cwd: &Path) -> Result<i32> {
     let status = Command::new(executable)
         .args(args)

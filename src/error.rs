@@ -73,7 +73,3 @@ impl From<serde_json::Error> for AcreError {
 }
 
 pub type Result<T> = std::result::Result<T, AcreError>;
-
-pub fn fail<T>(code: &'static str, message: impl Into<String>, exit_code: i32) -> Result<T> {
-    Err(AcreError::new(code, message, exit_code))
-}

@@ -1,20 +1,19 @@
 use std::path::Path;
 
 use crate::error::Result;
-use crate::git::runner::{RunOptions, decode_stdout, run_git_with};
+use crate::git::runner::{RunOptions, decode_stdout, run_git, run_git_with};
 use crate::model::{GitRef, GitRefKind};
 
 pub fn list_refs(cwd: &Path) -> Result<Vec<GitRef>> {
     let format = "%(refname)%00%(objectname)%00%(upstream)%00";
-    let result = run_git_with(
+    let result = run_git(
         cwd,
-        vec![
-            "for-each-ref".into(),
-            format!("--format={format}"),
-            "refs/heads".into(),
-            "refs/remotes".into(),
+        &[
+            "for-each-ref",
+            &format!("--format={format}"),
+            "refs/heads",
+            "refs/remotes",
         ],
-        RunOptions::default(),
     )?;
     Ok(parse_refs(&result.stdout))
 }
@@ -74,7 +73,7 @@ pub fn parse_refs(buffer: &[u8]) -> Vec<GitRef> {
 pub fn validate_branch_name(cwd: &Path, branch: &str) -> Result<bool> {
     let result = run_git_with(
         cwd,
-        vec!["check-ref-format".into(), "--branch".into(), branch.into()],
+        &["check-ref-format", "--branch", branch],
         RunOptions {
             accepted_statuses: &[0, 1, 128],
             ..RunOptions::default()
@@ -86,11 +85,7 @@ pub fn validate_branch_name(cwd: &Path, branch: &str) -> Result<bool> {
 pub fn resolve_oid(cwd: &Path, reference: &str) -> Result<Option<String>> {
     let result = run_git_with(
         cwd,
-        vec![
-            "rev-parse".into(),
-            "--verify".into(),
-            format!("{reference}^{{commit}}"),
-        ],
+        &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
         RunOptions {
             accepted_statuses: &[0, 128],
             ..RunOptions::default()
