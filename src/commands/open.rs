@@ -71,6 +71,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
     let selector = match selector {
         Some(selector) => selector.to_owned(),
         None => {
+            // No terminal to draw the picker on; ask for an explicit target instead of hanging.
             if !context.interactive {
                 return Err(AcreError::new(
                     "ACRE_TARGET_REQUIRED",
@@ -109,6 +110,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
 
     if !child_argv.is_empty() {
         let executable = child_argv[0].to_string_lossy().into_owned();
+        // Run first, release after: the lease keeps `done` from pulling the directory out mid-command.
         let status = run_passthrough(&executable, &child_argv[1..], &materialized.path);
         if let Some(lease) = &materialized.lease {
             let _ = release_workspace_lease(&config, &materialized.repository, &lease.id);
@@ -132,6 +134,7 @@ fn picker_rows(repository: &Repository, state: &RepositoryState) -> Result<Vec<P
                     .map(|workspace| workspace.target.display_name.clone())
             })
             .unwrap_or_else(|| format!("detached {}", &worktree.head[..worktree.head.len().min(8)]));
+        // Remember which branches already have a worktree so the branch list below doesn't repeat them.
         if let Some(branch) = &worktree.branch {
             used.insert(branch.clone());
         }

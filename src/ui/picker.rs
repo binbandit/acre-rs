@@ -55,6 +55,7 @@ fn picker_loop<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]
         }
         let visible = visible_rows(rows, &filter);
         match key.code {
+            // Raw mode swallows the terminal's own Ctrl-C, so we have to honour it ourselves.
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(PickerResult::Interrupted);
             }
@@ -78,6 +79,7 @@ fn picker_loop<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]
                     return Ok(PickerResult::Selected(row.value.clone()));
                 }
             }
+            // Any edit to the filter resets the selection; the old index points at a different row now.
             KeyCode::Backspace => {
                 filter.pop();
                 selected = 0;

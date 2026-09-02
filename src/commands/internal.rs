@@ -34,6 +34,7 @@ pub fn replenish(common_dir: &std::path::Path) -> Result<i32> {
 }
 
 pub fn complete(context: &CommandContext, token: &str) -> Result<i32> {
+    // Subcommands a person types; hidden ones stay out of completion.
     let mut values = ["new", "done", "setup", "-", "pr:"]
         .into_iter()
         .map(ToOwned::to_owned)

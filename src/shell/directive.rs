@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
 
+// Checked by the generated shell functions; bump it and they refuse rather than misread.
 pub const DIRECTIVE_VERSION: &str = "acre-directive-v1";
 
 pub fn write_cd_directive(context: &CommandContext, target: &Path) -> Result<()> {

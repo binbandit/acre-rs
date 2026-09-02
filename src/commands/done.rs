@@ -30,6 +30,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         .as_ref()
         .map(|worktree| worktree.path.clone());
 
+    // With a selector, `done` acts on that workspace from wherever we stand.
     let target_path = if let Some(selector) = selector {
         let target = resolve_existing_target(&repository, &state, selector)?;
         target
@@ -126,6 +127,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         return Ok(exit::SUCCESS);
     }
     let workspace = workspace.expect("checked above");
+    // Our own pid and the wrapper shell's are expected in the directory; anything else counts.
     let assess = AssessOptions {
         allowed_session_id: context.shell.session_id.clone(),
         allowed_lease_id: None,
@@ -204,6 +206,7 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
             exit::NOT_FOUND,
         )
     })?;
+    // The shell has already moved, so rediscover from the stored common dir rather than the cwd.
     let repository = discover_repository_from_common_dir(&operation.repository_common_dir)?;
     let state = load_repository_state(&config, &repository)?;
     let workspace = state
@@ -276,6 +279,7 @@ fn safe_destination(
     let primary = repository
         .worktrees
         .iter()
+        // Fall back to the primary worktree; it is permanent, so it is always a safe place to stand.
         .find(|worktree| worktree.is_main)
         .or_else(|| repository.worktrees.first())
         .filter(|worktree| {

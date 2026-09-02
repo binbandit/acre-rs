@@ -55,6 +55,7 @@ pub fn navigate_direct(
         })));
     }
     let session_id = context.shell.session_id.as_deref().expect("checked above");
+    // Record before writing the directive, so `acre -` works even if the cd itself fails.
     record_navigation(config, session_id, &context.cwd, destination, context.shell.pid)?;
     let renderer = Renderer::new(context);
     renderer.line(format!(

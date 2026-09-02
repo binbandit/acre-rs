@@ -36,6 +36,7 @@ impl Renderer {
         );
     }
 
+    // Pretty-printed: the same output serves scripts and a human reading it back.
     pub fn json<T: Serialize>(&self, value: &T) {
         let mut stdout = std::io::stdout().lock();
         let _ = serde_json::to_writer_pretty(&mut stdout, value);

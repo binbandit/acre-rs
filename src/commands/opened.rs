@@ -17,9 +17,11 @@ pub fn navigate_to_materialized(
     config: &AcreConfig,
     result: &MaterializedWorkspace,
 ) -> Result<PathBuf> {
+    // Land in the same subdirectory the user was in, when the new worktree has it.
     let destination = navigation_destination(context, &result.repository, &result.path);
     let renderer = Renderer::new(context);
     if context.global.json {
+        // JSON mode never writes a directive; the caller moves itself.
         renderer.json(&materialized_payload(result, &destination, true));
         return Ok(destination);
     }
@@ -130,6 +132,7 @@ pub fn render_materialized_summary(
         .workspace
         .environment
         .as_ref()
+        // Cold is the one state that needs the user to act, so it gets the loudest line.
         .is_some_and(|environment| environment.state == EnvironmentState::Cold)
     {
         renderer.line("");

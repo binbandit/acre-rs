@@ -19,6 +19,7 @@ pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -
     let renderer = Renderer::new(context);
     let shell = shell.unwrap_or_else(detect_shell);
     let rc = shell_config_path(shell);
+    // Markers let a later run replace the block in place instead of appending a second copy.
     let desired = format!("{START}\n{}\n{END}", shell_snippet(shell));
     let current = fs::read_to_string(&rc).unwrap_or_default();
     let next = install_block(&current, &desired);
@@ -136,6 +137,7 @@ fn install_block(current: &str, desired: &str) -> String {
             return format!("{}{}{}", &current[..start], desired, &current[end..]);
         }
     }
+    // Don't glue our block onto a file that lacks a final newline.
     let separator = if current.is_empty() || current.ends_with('\n') {
         ""
     } else {

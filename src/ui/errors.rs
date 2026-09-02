@@ -48,6 +48,7 @@ pub fn render_failure(context: &CommandContext, error: &AcreError) -> i32 {
             }
         }
     }
+    // The one place we suggest creating a branch: an unknown target is never created silently.
     if error.code == "ACRE_TARGET_NOT_FOUND" {
         let selector = error
             .details

@@ -56,6 +56,7 @@ pub fn set(context: &CommandContext, key: &str, value: &str) -> Result<i32> {
 
 pub fn edit(_context: &CommandContext) -> Result<i32> {
     let target = config_path();
+    // Create the defaults first so the editor opens a real file rather than an empty buffer.
     if !target.exists() {
         save_config(&AcreConfig::default())?;
     }
@@ -107,6 +108,7 @@ fn split_command(value: &str) -> Vec<String> {
     let mut quoted = false;
     for character in value.chars() {
         match character {
+            // Just enough quoting for a path with spaces; not a full shell parser on purpose.
             '"' => quoted = !quoted,
             character if character.is_whitespace() && !quoted => {
                 if !current.is_empty() {

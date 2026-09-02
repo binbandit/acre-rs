@@ -15,6 +15,7 @@ pub mod exit {
     pub const REFUSED: i32 = 6;
     pub const GIT: i32 = 7;
     pub const NETWORK: i32 = 8;
+    // 128 + SIGINT, what a shell reports for Ctrl-C.
     pub const INTERRUPTED: i32 = 130;
     // A private handshake with the shell wrapper: cd, then call back with the token.
     pub const RESUME: i32 = 194;
@@ -39,6 +40,7 @@ impl AcreError {
     }
 
     pub fn with_details<T: Serialize>(mut self, details: T) -> Self {
+        // Details are diagnostics; a value that won't serialise is not worth failing over.
         self.details = serde_json::to_value(details).unwrap_or_else(|_| json!({}));
         self
     }

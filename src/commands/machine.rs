@@ -39,6 +39,7 @@ pub fn acquire(
             lease: Some(LeaseRequest {
                 holder: holder.to_owned(),
                 pid,
+                // No shell session: machine leases are released explicitly, never by navigation.
                 session_id: None,
             }),
             no_replenish: false,

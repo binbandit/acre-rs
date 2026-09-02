@@ -118,6 +118,7 @@ struct DoctorCheck {
 pub fn doctor(context: &CommandContext) -> Result<i32> {
     let renderer = Renderer::new(context);
     let mut checks = Vec::new();
+    // Git first: without it every other check is moot.
     match run_process("git", &["--version"], RunOptions::default()) {
         Ok(result) => checks.push(DoctorCheck {
             name: "Git".into(),
@@ -170,6 +171,7 @@ pub fn doctor(context: &CommandContext) -> Result<i32> {
                 });
                 checks.push(DoctorCheck {
                     name: "Warm pool".into(),
+                    // Not an error, just a hint: an empty pool means the next `new` pays for a clone.
                     ok: idle > 0,
                     detail: format!("{idle} idle slot(s)"),
                 });

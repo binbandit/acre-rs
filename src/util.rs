@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::error::{AcreError, Result};
 
 pub fn now_iso() -> String {
+    // RFC 3339 with `Z`: sorts as text, which the index and gc rely on.
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
@@ -43,6 +44,7 @@ pub fn random_short(length: usize) -> String {
 }
 
 pub fn home_dir() -> PathBuf {
+    // No home means a very strange environment; the cwd keeps us running rather than panicking.
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -176,6 +178,7 @@ pub fn remove_path(path: &Path) -> Result<()> {
 pub fn unique_paths(values: impl IntoIterator<Item = String>) -> Vec<String> {
     values
         .into_iter()
+        // Normalise so `./node_modules/` and `node_modules` are one root.
         .map(|value| value.trim_start_matches("./").trim_end_matches('/').to_owned())
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>()
@@ -202,6 +205,7 @@ pub fn shell_quote(value: &Path) -> String {
     }
     #[cfg(not(windows))]
     {
+        // Single quotes take everything literally; an embedded quote is closed, escaped, reopened.
         format!("'{}'", value.replace('\'', "'\\''"))
     }
 }

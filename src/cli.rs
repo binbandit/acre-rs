@@ -53,6 +53,7 @@ Acre never runs repository setup scripts automatically and never recycles dirty 
     after_help = AFTER_HELP,
 )]
 struct Cli {
+    // Like git -C: run as if started from PATH, for tools that can't cd.
     #[arg(short = 'C', long, global = true, value_name = "PATH")]
     directory: Option<PathBuf>,
 
@@ -75,6 +76,7 @@ struct Cli {
     #[arg(value_name = "TARGET", allow_hyphen_values = true)]
     target: Option<String>,
 
+    // Everything after `--` belongs to the user's command, flags included.
     #[arg(last = true, value_name = "COMMAND")]
     program: Vec<OsString>,
 }
@@ -108,6 +110,7 @@ enum Command {
     #[command(hide = true)]
     Completion(CompletionArgs),
 
+    // Double underscore: called by the generated shell functions, never typed by a person.
     #[command(name = "__session-id", hide = true)]
     SessionId,
 
@@ -311,6 +314,7 @@ fn create_context(cli: &Cli, cwd: PathBuf) -> CommandContext {
         // The wrapper exports an empty id when the session-id call failed; treat that as no session.
         .filter(|value| !value.is_empty());
     let directive_file = std::env::var_os("ACRE_DIRECTIVE_FILE").map(PathBuf::from);
+    // The wrapper's own pid, so the shell standing in a workspace isn't counted as a foreign process.
     let pid = std::env::var("ACRE_SHELL_PID")
         .ok()
         .and_then(|value| value.parse().ok());

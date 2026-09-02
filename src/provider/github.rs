@@ -41,6 +41,7 @@ pub fn parse_pull_request_selector(selector: &str) -> Option<u64> {
     if let Some(value) = lower.strip_prefix("pr:") {
         return value.parse().ok();
     }
+    // Any GitHub PR URL form, including trailing /files or /commits.
     let marker = "/pull/";
     let index = lower.find(marker)? + marker.len();
     lower[index..]
@@ -77,6 +78,7 @@ pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<P
             "number,title,author,url,baseRefName,headRefName,headRefOid,isCrossRepository,headRepository",
         ],
         RunOptions {
+            // gh reads the repo's own auth and host config from inside the checkout.
             cwd: Some(repository.top_level.clone()),
             timeout: Some(std::time::Duration::from_secs(60)),
             ..RunOptions::default()

@@ -47,7 +47,9 @@ complete -F _acre_completion acre
     }
 }
 
+// Doubled braces in the templates below are format! escapes, not shell syntax.
 fn posix_integration(shell: &str) -> String {
+    // bash and zsh share one function body; only completion differs.
     let completion = generate_completion(if shell == "zsh" {
         SupportedShell::Zsh
     } else {

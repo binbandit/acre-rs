@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+// Untrusted means a fork PR: no seed files in, no caches out to the pool.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TrustLevel {
@@ -50,6 +51,7 @@ pub struct StoredTarget {
     pub pull_request: Option<PullRequestTarget>,
 }
 
+// Ready: required roots present. Warm: some caches. Cold: nothing. Unknown: recovered, unverified.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum EnvironmentState {
@@ -59,6 +61,7 @@ pub enum EnvironmentState {
     Unknown,
 }
 
+// How caches arrived: reflinked, copied, reused in place, or never cloned.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CloneMode {
@@ -89,6 +92,7 @@ pub enum WorkspaceOwnership {
     External,
 }
 
+// Idle is a pool slot; Retained is a recovered workspace kept out of caution.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkspaceStatus {
@@ -159,6 +163,7 @@ pub struct SeedFileSnapshot {
     pub hash: String,
 }
 
+// Who is using a workspace; `done` refuses while another holder remains.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceLease {
@@ -237,6 +242,7 @@ pub struct EnvironmentConfig {
     pub excluded_roots: Vec<String>,
 }
 
+// Checked in as .acre.json; data only, so a branch can widen cache roots but never run anything.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoConfig {

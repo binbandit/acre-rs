@@ -49,6 +49,7 @@ fn transform(value: &str, color: bool) -> String {
             cursor = next;
             continue;
         }
+        // An unclosed `<` is plain text; emit the rest verbatim.
         let Some(end_offset) = value[cursor..].find('>') else {
             output.push_str(&value[cursor..]);
             break;

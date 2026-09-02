@@ -20,6 +20,7 @@ pub fn run(
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let target = resolve_new_target(&repository, branch, from, fresh)?;
+    // `--stay` means the shell isn't following, so nothing holds the workspace open.
     let lease = if stay {
         None
     } else {
