@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::model::{AcreConfig, Repository};
 use crate::util::{absolute, home_dir, repository_slug};
@@ -58,8 +58,4 @@ pub fn shells_root(config: &AcreConfig) -> PathBuf {
 
 pub fn shell_state_path(config: &AcreConfig, id: &str) -> PathBuf {
     shells_root(config).join(format!("{id}.json"))
-}
-
-pub fn belongs_to_root(root: &Path, candidate: &Path) -> bool {
-    crate::util::is_inside(root, candidate)
 }

@@ -127,10 +127,6 @@ pub fn run_git(cwd: &Path, args: &[&str]) -> Result<ProcessResult> {
     )
 }
 
-pub fn run_git_strings(cwd: &Path, args: Vec<String>) -> Result<ProcessResult> {
-    run_git_with(cwd, args, RunOptions::default())
-}
-
 pub fn run_git_with<'a>(
     cwd: &'a Path,
     args: Vec<String>,

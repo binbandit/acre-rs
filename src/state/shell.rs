@@ -37,16 +37,3 @@ pub fn record_navigation(
     };
     write_json(&shell_state_path(config, id), &state)
 }
-
-pub fn touch_shell_state(config: &AcreConfig, id: &str, cwd: &Path, pid: Option<u32>) -> Result<()> {
-    let current = read_shell_state(config, id)?;
-    let state = ShellSessionState {
-        schema_version: 1,
-        id: id.to_owned(),
-        current_directory: Some(cwd.to_path_buf()),
-        previous_directory: current.and_then(|value| value.previous_directory),
-        pid,
-        updated_at: now_iso(),
-    };
-    write_json(&shell_state_path(config, id), &state)
-}

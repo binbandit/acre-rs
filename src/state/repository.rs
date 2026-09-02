@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::model::{
-    AcreConfig, GitWorktree, Repository, RepositoryState, StoredTarget, TrustLevel, WorkspaceLease,
-    WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
+    AcreConfig, GitWorktree, Repository, RepositoryState, StoredTarget, TrustLevel, WorkspaceOwnership,
+    WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
 };
 use crate::state::lock::is_pid_alive;
 use crate::state::paths::{active_root, repository_state_path, slots_root};
@@ -94,17 +94,6 @@ pub fn find_workspace_by_path<'a>(
         .find(|workspace| crate::util::canonical_or_absolute(&workspace.path) == target_path)
 }
 
-pub fn find_workspace_by_path_mut<'a>(
-    state: &'a mut RepositoryState,
-    target_path: &Path,
-) -> Option<&'a mut WorkspaceRecord> {
-    let target_path = crate::util::canonical_or_absolute(target_path);
-    state
-        .workspaces
-        .iter_mut()
-        .find(|workspace| crate::util::canonical_or_absolute(&workspace.path) == target_path)
-}
-
 pub fn find_workspace_for_target<'a>(
     state: &'a RepositoryState,
     target: &StoredTarget,
@@ -123,14 +112,6 @@ pub fn find_workspace_for_target<'a>(
         }
         workspace.target.kind == target.kind && workspace.target.oid == target.oid
     })
-}
-
-pub fn leases_for_workspace<'a>(state: &'a RepositoryState, workspace_id: &str) -> Vec<&'a WorkspaceLease> {
-    state
-        .leases
-        .iter()
-        .filter(|lease| lease.workspace_id == workspace_id)
-        .collect()
 }
 
 fn recover_owned_worktrees(

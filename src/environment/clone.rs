@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use crate::environment::inspect::inspect_environment;
@@ -258,11 +258,4 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
         })?;
     }
     Ok(())
-}
-
-pub fn find_copy_source(candidates: &[PathBuf], excluded: &Path) -> Option<PathBuf> {
-    candidates
-        .iter()
-        .find(|path| path.as_path() != excluded && path.exists())
-        .cloned()
 }

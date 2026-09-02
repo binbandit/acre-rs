@@ -26,10 +26,6 @@ pub fn escape_markup(value: &str) -> String {
     output
 }
 
-pub fn strip_markup(value: &str) -> String {
-    transform(value, false)
-}
-
 pub fn render_markup(value: &str, color: bool) -> String {
     transform(value, color)
 }
@@ -92,7 +88,7 @@ mod tests {
 
     #[test]
     fn strips_known_tags() {
-        assert_eq!(strip_markup("<bold><green>Ready</green></bold>"), "Ready");
+        assert_eq!(render_markup("<bold><green>Ready</green></bold>", false), "Ready");
     }
 
     #[test]

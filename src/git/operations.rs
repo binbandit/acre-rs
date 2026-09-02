@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::error::{AcreError, Result, exit, fail};
 use crate::git::runner::{RunOptions, decode_stdout, run_git_with};
 use crate::model::{Repository, ResolvedTarget, StoredTarget, TargetKind};
-use crate::util::{ensure_directory, remove_path};
+use crate::util::ensure_directory;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -197,22 +197,6 @@ pub fn repair_worktrees(repository: &Repository) -> Result<()> {
     Ok(())
 }
 
-pub fn unlock_worktree(repository: &Repository, target_path: &Path) -> Result<()> {
-    run_git_with(
-        &repository.top_level,
-        vec![
-            "worktree".into(),
-            "unlock".into(),
-            target_path.display().to_string(),
-        ],
-        RunOptions {
-            timeout: Some(GIT_TIMEOUT),
-            ..RunOptions::default()
-        },
-    )?;
-    Ok(())
-}
-
 pub fn fetch_ref(
     repository: &Repository,
     remote: &str,
@@ -232,10 +216,6 @@ pub fn fetch_ref(
         },
     )?;
     Ok(())
-}
-
-pub fn delete_path_if_unregistered(path: &Path) -> Result<()> {
-    remove_path(path)
 }
 
 pub fn delete_branch_if_expected(repository: &Repository, branch: &str, expected_oid: &str) -> Result<bool> {

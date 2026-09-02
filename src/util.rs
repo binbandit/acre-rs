@@ -269,6 +269,17 @@ pub fn unique_paths(values: impl IntoIterator<Item = String>) -> Vec<String> {
         .collect()
 }
 
+/// True when every character of `needle` appears in `haystack` in order, not necessarily adjacent.
+pub fn is_subsequence(needle: &str, haystack: &str) -> bool {
+    let mut remaining = needle.chars().peekable();
+    for character in haystack.chars() {
+        if remaining.peek() == Some(&character) {
+            remaining.next();
+        }
+    }
+    remaining.peek().is_none()
+}
+
 pub fn shell_quote(value: &Path) -> String {
     let value = value.to_string_lossy();
     #[cfg(windows)]

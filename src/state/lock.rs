@@ -19,7 +19,6 @@ struct LockOwner {
 pub struct RepositoryLock {
     path: PathBuf,
     token: String,
-    released: bool,
 }
 
 impl RepositoryLock {
@@ -42,7 +41,6 @@ impl RepositoryLock {
                     return Ok(Self {
                         path: path.to_path_buf(),
                         token,
-                        released: false,
                     });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -72,27 +70,15 @@ impl RepositoryLock {
             }
         }
     }
+}
 
-    pub fn release(mut self) -> Result<()> {
-        self.release_inner();
-        self.released = true;
-        Ok(())
-    }
-
-    fn release_inner(&self) {
+impl Drop for RepositoryLock {
+    fn drop(&mut self) {
         let owner = read_json::<LockOwner>(&self.path.join("owner.json"))
             .ok()
             .flatten();
         if owner.as_ref().is_some_and(|owner| owner.token == self.token) {
             let _ = remove_path(&self.path);
-        }
-    }
-}
-
-impl Drop for RepositoryLock {
-    fn drop(&mut self) {
-        if !self.released {
-            self.release_inner();
         }
     }
 }
