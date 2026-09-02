@@ -44,7 +44,7 @@ pub fn navigate_to_materialized(
         return Ok(destination);
     }
     render_materialized_summary(&renderer, result, &destination, true);
-    if !context.shell.active || context.shell.session_id.is_none() {
+    if !context.shell.active {
         renderer.line("");
         renderer.line("Move this shell:");
         renderer.line(format!(
@@ -67,7 +67,7 @@ pub fn navigate_direct(
     destination: &Path,
     label: &str,
 ) -> Result<()> {
-    if !context.shell.active || context.shell.session_id.is_none() {
+    if !context.shell.active {
         return Err(AcreError::new(
             "ACRE_SHELL_INTEGRATION_REQUIRED",
             "Acre cannot move this shell until shell integration is installed.",

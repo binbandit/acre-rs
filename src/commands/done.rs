@@ -126,12 +126,6 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
             .flatten()
             .collect(),
     };
-    let assessment = assess_workspace_for_return(&config, &repository, &workspace.id, &assess)?;
-    if !assessment.safe {
-        render_unsafe(context, &assessment);
-        return Ok(exit::REFUSED);
-    }
-
     if !is_current {
         let result = return_workspace(
             &config,
@@ -142,15 +136,21 @@ pub fn command_done(context: &CommandContext, selector: Option<&str>) -> Result<
                 remove_lease_id: None,
             },
         )?;
+        if !result.returned {
+            render_unsafe(context, &result.assessment);
+            return Ok(exit::REFUSED);
+        }
         render_done(context, &workspace, result.pooled, result.external);
-        return Ok(if result.returned || result.external {
-            exit::SUCCESS
-        } else {
-            exit::REFUSED
-        });
+        return Ok(exit::SUCCESS);
     }
 
-    if !context.shell.active || context.shell.session_id.is_none() {
+    // The shell sits inside this workspace, so prove the return safe before moving it.
+    let assessment = assess_workspace_for_return(&config, &repository, &workspace.id, &assess)?;
+    if !assessment.safe {
+        render_unsafe(context, &assessment);
+        return Ok(exit::REFUSED);
+    }
+    if !context.shell.active {
         return Err(AcreError::new(
             "ACRE_SHELL_INTEGRATION_REQUIRED",
             "Acre cannot safely return the workspace containing this shell until shell integration is installed.",
