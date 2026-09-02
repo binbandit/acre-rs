@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::environment::clone::{clear_cache_roots, clear_seed_files, seed_environment, seed_files_only};
 use crate::environment::fingerprint::build_environment_plan;
 use crate::environment::inspect::inspect_environment;
+use crate::environment::roots::inspect_ignored;
 use crate::environment::seed::snapshot_seed_files;
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::{
@@ -13,7 +14,6 @@ use crate::git::operations::{
     remove_worktree, reset_workspace, restore_stored_target,
 };
 use crate::git::repository::discover_repository;
-use crate::git::status::list_ignored;
 use crate::model::{
     AcreConfig, DoneAssessment, EnvironmentPlan, EnvironmentSnapshot, EnvironmentState,
     MaterializedWorkspace, Repository, RepositoryState, ResolvedTarget, StoredTarget, TrustLevel,
@@ -190,7 +190,7 @@ pub fn materialize_workspace(
                 environment = inspect_environment(&active_path, &plan);
             }
 
-            let baseline_ignored = list_ignored(&active_path, &environment.cache_roots)?;
+            let baseline_ignored = inspect_ignored(&active_path, &environment.cache_roots)?.unknown;
             let baseline_seed_files = snapshot_seed_files(&active_path, &seeded_paths)?;
             let timestamp = now_iso();
             let workspace = WorkspaceRecord {

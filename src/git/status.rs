@@ -129,7 +129,8 @@ pub fn in_progress_operation(cwd: &Path) -> Result<Option<String>> {
     Ok(None)
 }
 
-pub fn list_ignored(cwd: &Path, excluded_roots: &[String]) -> Result<Vec<String>> {
+/// Ignored paths reported by Git, collapsed to their topmost ignored directory.
+pub fn list_ignored_entries(cwd: &Path) -> Result<Vec<String>> {
     let result = run_git(
         cwd,
         &[
@@ -142,20 +143,11 @@ pub fn list_ignored(cwd: &Path, excluded_roots: &[String]) -> Result<Vec<String>
             "-z",
         ],
     )?;
-    let roots: Vec<String> = excluded_roots
-        .iter()
-        .map(|root| root.trim_start_matches("./").trim_end_matches('/').to_owned())
-        .collect();
     let mut entries: Vec<String> = result
         .stdout
         .split(|byte| *byte == 0)
         .filter(|value| !value.is_empty())
         .map(|value| String::from_utf8_lossy(value).into_owned())
-        .filter(|entry| {
-            !roots
-                .iter()
-                .any(|root| entry == root || entry.starts_with(&format!("{root}/")))
-        })
         .collect();
     entries.sort();
     Ok(entries)

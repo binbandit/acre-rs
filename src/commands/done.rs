@@ -328,12 +328,15 @@ fn render_unsafe(context: &CommandContext, assessment: &crate::model::DoneAssess
     if let Some(operation) = &assessment.operation {
         renderer.line(format!("  {} in progress", renderer.value(operation)));
     }
-    for entry in assessment.new_ignored.iter().take(8) {
-        renderer.line(format!("  ignored: {}", renderer.value(entry)));
+    if let Some(reason) = &assessment.locked {
+        renderer.line(if reason.is_empty() {
+            "  worktree locked".to_owned()
+        } else {
+            format!("  worktree locked: {}", renderer.value(reason))
+        });
     }
-    for entry in assessment.changed_seed_files.iter().take(8) {
-        renderer.line(format!("  changed local file: {}", renderer.value(entry)));
-    }
+    render_entries(&renderer, "ignored", &assessment.new_ignored);
+    render_entries(&renderer, "changed local file", &assessment.changed_seed_files);
     for lease in &assessment.leases {
         renderer.line(format!("  held by {}", renderer.value(&lease.holder)));
     }
@@ -346,6 +349,16 @@ fn render_unsafe(context: &CommandContext, assessment: &crate::model::DoneAssess
     }
     renderer.line("");
     renderer.line("<dim>Acre left the workspace exactly where it is.</dim>");
+}
+
+fn render_entries(renderer: &Renderer<'_>, label: &str, entries: &[String]) {
+    const SHOWN: usize = 8;
+    for entry in entries.iter().take(SHOWN) {
+        renderer.line(format!("  {label}: {}", renderer.value(entry)));
+    }
+    if entries.len() > SHOWN {
+        renderer.line(format!("  <dim>and {} more</dim>", entries.len() - SHOWN));
+    }
 }
 
 fn render_done(context: &CommandContext, workspace: &WorkspaceRecord, pooled: bool, external: bool) {

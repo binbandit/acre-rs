@@ -1,8 +1,12 @@
+use crate::environment::fingerprint::build_environment_plan;
+use crate::environment::roots::inspect_ignored;
 use crate::environment::seed::changed_seed_files;
 use crate::error::Result;
-use crate::git::status::{in_progress_operation, list_ignored, read_status};
+use crate::git::status::{in_progress_operation, read_status};
 use crate::model::{AcreConfig, DoneAssessment, Repository, RepositoryState, WorkspaceRecord};
 use crate::pool::process::find_processes_using_path;
+use crate::state::config::load_repo_config;
+use crate::util::canonical_or_absolute;
 
 #[derive(Debug, Clone, Default)]
 pub struct AssessOptions {
@@ -20,12 +24,20 @@ pub fn assess_workspace(
 ) -> Result<DoneAssessment> {
     let status = read_status(&workspace.path)?;
     let operation = in_progress_operation(&workspace.path)?;
-    let excluded_roots = workspace
-        .environment
-        .as_ref()
-        .map(|environment| environment.cache_roots.as_slice())
-        .unwrap_or(&[]);
-    let ignored = list_ignored(&workspace.path, excluded_roots)?;
+    let registered = repository
+        .worktrees
+        .iter()
+        .find(|worktree| canonical_or_absolute(&worktree.path) == canonical_or_absolute(&workspace.path));
+    let cache_roots = match &workspace.environment {
+        Some(environment) => environment.cache_roots.clone(),
+        // A recovered workspace carries no snapshot, so derive its approved roots from its checkout.
+        None => {
+            let reference = registered.map_or("HEAD", |worktree| worktree.head.as_str());
+            let repo_config = load_repo_config(&repository.top_level)?;
+            build_environment_plan(repository, reference, config, &repo_config)?.cache_roots
+        }
+    };
+    let ignored = inspect_ignored(&workspace.path, &cache_roots)?.unknown;
     let baseline: std::collections::BTreeSet<&str> =
         workspace.baseline_ignored.iter().map(String::as_str).collect();
     let new_ignored = ignored
@@ -48,19 +60,16 @@ pub fn assess_workspace(
     } else {
         Vec::new()
     };
-    let registered = repository.worktrees.iter().find(|worktree| {
-        crate::util::canonical_or_absolute(&worktree.path)
-            == crate::util::canonical_or_absolute(&workspace.path)
-    });
+    let locked = registered
+        .filter(|worktree| worktree.locked)
+        .map(|worktree| worktree.lock_reason.clone().unwrap_or_default());
     let mut reasons = Vec::new();
-    if let Some(worktree) = registered.filter(|worktree| worktree.locked) {
-        reasons.push(
-            worktree
-                .lock_reason
-                .as_ref()
-                .map(|reason| format!("worktree is locked: {reason}"))
-                .unwrap_or_else(|| "worktree is locked".to_owned()),
-        );
+    if let Some(reason) = &locked {
+        reasons.push(if reason.is_empty() {
+            "worktree is locked".to_owned()
+        } else {
+            format!("worktree is locked: {reason}")
+        });
     }
     if status.dirty {
         reasons.push("working tree contains tracked or untracked changes".to_owned());
@@ -84,6 +93,7 @@ pub fn assess_workspace(
         workspace: workspace.clone(),
         status,
         operation,
+        locked,
         new_ignored,
         changed_seed_files,
         leases,

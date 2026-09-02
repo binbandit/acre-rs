@@ -366,6 +366,7 @@ pub struct DoneAssessment {
     pub workspace: WorkspaceRecord,
     pub status: WorkingTreeStatus,
     pub operation: Option<String>,
+    pub locked: Option<String>,
     pub new_ignored: Vec<String>,
     pub changed_seed_files: Vec<String>,
     pub leases: Vec<WorkspaceLease>,

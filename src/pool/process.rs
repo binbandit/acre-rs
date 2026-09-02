@@ -69,10 +69,13 @@ fn find_macos_processes(target: &Path, ignored_pids: &[u32]) -> Vec<ProcessUse> 
     use crate::git::runner::{RunOptions, run_process};
     use crate::util::is_inside;
 
+    // lsof inherits Acre's working directory, which is usually the workspace being
+    // assessed, so run it from the filesystem root to keep it out of its own report.
     let result = run_process(
         "lsof",
         &["-a".into(), "-d".into(), "cwd".into(), "-F".into(), "pcn".into()],
         RunOptions {
+            cwd: Some(Path::new("/")),
             timeout: Some(std::time::Duration::from_secs(10)),
             accepted_statuses: &[0, 1],
             ..RunOptions::default()

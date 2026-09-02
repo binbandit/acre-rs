@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::environment::inspect::inspect_environment;
+use crate::environment::roots::inspect_ignored;
 use crate::error::{AcreError, Result};
 use crate::git::runner::{RunOptions, run_git_with, run_process};
 use crate::model::{CloneMode, EnvironmentPlan, EnvironmentSnapshot, TrustLevel};
@@ -32,12 +33,9 @@ pub fn seed_environment(
     let mut cloned_bytes = 0;
     let mut clone_mode = CloneMode::None;
 
-    for cache_root in &plan.cache_roots {
-        let source = source_root.join(cache_root);
-        let destination = destination_root.join(cache_root);
-        if !source.exists() {
-            continue;
-        }
+    for cache_root in inspect_ignored(source_root, &plan.cache_roots)?.cache_roots {
+        let source = source_root.join(&cache_root);
+        let destination = destination_root.join(&cache_root);
         remove_path(&destination)?;
         if let Some(parent) = destination.parent() {
             ensure_directory(parent)?;
@@ -94,7 +92,7 @@ pub fn seed_files_only(
 }
 
 pub fn clear_cache_roots(root: &Path, cache_roots: &[String]) -> Result<()> {
-    for relative in cache_roots {
+    for relative in inspect_ignored(root, cache_roots)?.cache_roots {
         remove_path(&root.join(relative))?;
     }
     Ok(())
