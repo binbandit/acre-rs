@@ -12,12 +12,6 @@ pub enum SupportedShell {
     Powershell,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputMode {
-    Human,
-    Json,
-}
-
 #[derive(Debug, Clone)]
 pub struct GlobalOptions {
     pub directory: Option<PathBuf>,
@@ -39,7 +33,6 @@ pub struct ShellBridge {
 pub struct CommandContext {
     pub cwd: PathBuf,
     pub interactive: bool,
-    pub output_mode: OutputMode,
     pub global: GlobalOptions,
     pub shell: ShellBridge,
 }

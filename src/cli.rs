@@ -5,7 +5,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::commands;
 use crate::error::{AcreError, Result};
-use crate::model::{CommandContext, GlobalOptions, OutputMode, ShellBridge, SupportedShell};
+use crate::model::{CommandContext, GlobalOptions, ShellBridge, SupportedShell};
 use crate::ui::errors::render_failure;
 
 #[derive(Debug, Parser)]
@@ -219,13 +219,18 @@ pub fn run() -> i32 {
             )
             .exit();
     }
-    let context = match create_context(&cli) {
-        Ok(context) => context,
-        Err(error) => {
-            let fallback = fallback_context(&cli);
-            return render_failure(&fallback, &error);
-        }
+    let cwd = match &cli.directory {
+        Some(directory) => crate::util::canonical_or_absolute(directory),
+        None => match std::env::current_dir() {
+            Ok(cwd) => cwd,
+            Err(error) => {
+                let context = create_context(&cli, PathBuf::from("."));
+                let error = AcreError::io("could not read current directory", error);
+                return render_failure(&context, &error);
+            }
+        },
     };
+    let context = create_context(&cli, cwd);
     match dispatch(&context, cli) {
         Ok(code) => code,
         Err(error) => render_failure(&context, &error),
@@ -282,12 +287,7 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
     }
 }
 
-fn create_context(cli: &Cli) -> Result<CommandContext> {
-    let cwd = match &cli.directory {
-        Some(directory) => crate::util::canonical_or_absolute(directory),
-        None => std::env::current_dir()
-            .map_err(|error| AcreError::io("could not read current directory", error))?,
-    };
+fn create_context(cli: &Cli, cwd: PathBuf) -> CommandContext {
     let session_id = std::env::var("ACRE_SHELL_SESSION_ID")
         .ok()
         .filter(|value| !value.is_empty());
@@ -295,16 +295,11 @@ fn create_context(cli: &Cli) -> Result<CommandContext> {
     let pid = std::env::var("ACRE_SHELL_PID")
         .ok()
         .and_then(|value| value.parse().ok());
-    Ok(CommandContext {
+    CommandContext {
         cwd,
         interactive: !cli.json
             && std::io::IsTerminal::is_terminal(&std::io::stdin())
             && std::io::IsTerminal::is_terminal(&std::io::stdout()),
-        output_mode: if cli.json {
-            OutputMode::Json
-        } else {
-            OutputMode::Human
-        },
         global: GlobalOptions {
             directory: cli.directory.clone(),
             json: cli.json,
@@ -317,31 +312,6 @@ fn create_context(cli: &Cli) -> Result<CommandContext> {
             directive_file,
             session_id,
             pid,
-        },
-    })
-}
-
-fn fallback_context(cli: &Cli) -> CommandContext {
-    CommandContext {
-        cwd: PathBuf::from("."),
-        interactive: false,
-        output_mode: if cli.json {
-            OutputMode::Json
-        } else {
-            OutputMode::Human
-        },
-        global: GlobalOptions {
-            directory: cli.directory.clone(),
-            json: cli.json,
-            no_color: cli.no_color,
-            plain: cli.plain,
-            verbose: cli.verbose,
-        },
-        shell: ShellBridge {
-            active: false,
-            directive_file: None,
-            session_id: None,
-            pid: None,
         },
     }
 }
