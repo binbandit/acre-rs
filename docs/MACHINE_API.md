@@ -34,7 +34,7 @@ Success fields:
 }
 ```
 
-A repeated acquisition by the same holder and shell identity refreshes the existing lease. A new acquisition receives a new opaque identity.
+Every acquisition receives its own opaque lease id, and every lease must be released. Acquiring an already-open workspace does not move or reset it.
 
 ## Create and acquire
 
