@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 use crate::error::Result;
 use crate::git::operations::{prune_worktrees, remove_worktree, repair_worktrees};
 use crate::git::repository::Repository;
-use crate::git::status::read_status;
 use crate::model::{AcreConfig, RepositoryState, WorkspaceSlot, WorkspaceStatus};
 use crate::state::repository::{LockedRepository, save_repository_state, stored_repository_state};
 use crate::util::{age_millis, canonical_or_absolute};
+use crate::workspace::pool::idle_slot_is_safe;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,19 +111,15 @@ pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Resu
     let mut skipped = Vec::new();
     for slot in candidates {
         // Look before removing: a slot someone edited by hand is kept and reported.
-        match read_status(&slot.path) {
-            // Data retention wins: a dirty slot is somebody's work, whatever our records say.
-            Ok(status) if status.dirty => skipped.push(GcSkipped {
+        if !idle_slot_is_safe(config, &locked.repository, &slot) {
+            skipped.push(GcSkipped {
                 slot,
-                reason: "slot is dirty".to_owned(),
-            }),
-            Ok(_) => match remove_worktree(&locked.repository, &slot.path, false) {
-                Ok(()) => removed.push(slot),
-                Err(error) => skipped.push(GcSkipped {
-                    slot,
-                    reason: error.to_string(),
-                }),
-            },
+                reason: "slot is in use, locked, changed, or unverified".to_owned(),
+            });
+            continue;
+        }
+        match remove_worktree(&locked.repository, &slot.path, false) {
+            Ok(()) => removed.push(slot),
             Err(error) => skipped.push(GcSkipped {
                 slot,
                 reason: error.to_string(),

@@ -106,8 +106,8 @@ pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<P
             .head_repository
             .and_then(|repository| repository.name_with_owner)
             .unwrap_or(repo_slug),
-        // A missing field would read as trusted, so keep isCrossRepository in the --json list above.
-        cross_repository: parsed.is_cross_repository.unwrap_or(false),
+        // Missing trust metadata must withhold secrets and keep caches out of the pool.
+        cross_repository: parsed.is_cross_repository.unwrap_or(true),
     })
 }
 

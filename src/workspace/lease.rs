@@ -82,7 +82,11 @@ pub fn lease_workspace_by_path(
     let mut locked = LockedRepository::open(config, repository)?;
     let Some(workspace_id) = locked
         .state
-        .workspace_at(workspace_path)
+        .workspace_at(
+            &crate::git::worktrees::find_current_worktree(&repository.worktrees, workspace_path)
+                .map(|worktree| worktree.path)
+                .unwrap_or_else(|| workspace_path.to_path_buf()),
+        )
         .map(|workspace| workspace.id.clone())
     else {
         return Ok(None);

@@ -1,13 +1,13 @@
 //! The environment plan: detected ecosystems, cache roots, seed files, and the generation fingerprint.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::process::Command;
 
 use serde_json::{Map, Value, json};
 
 use crate::environment::definitions::{ALL_FINGERPRINT_FILES, detect_ecosystems};
 use crate::error::Result;
-use crate::git::content::read_files_at_ref;
+use crate::git::content::read_matching_files_at_ref;
 use crate::git::repository::Repository;
 use crate::model::AcreConfig;
 use crate::state::config::load_repo_config;
@@ -29,19 +29,22 @@ pub fn build_environment_plan(
     config: &AcreConfig,
 ) -> Result<EnvironmentPlan> {
     // Read from the commit, not the worktree: the fingerprint must not depend on uncommitted edits.
-    let files = read_files_at_ref(&repository.top_level, reference, ALL_FINGERPRINT_FILES)?;
+    let files = read_matching_files_at_ref(&repository.top_level, reference, ALL_FINGERPRINT_FILES)?;
     let ecosystems = detect_ecosystems(&files);
     // .acre.json comes from the primary checkout on disk, not from the target commit.
-    let overrides = load_repo_config(&repository.top_level)?
+    let overrides = load_repo_config(repository.primary_path())?
         .environment
         .unwrap_or_default();
-    let excluded: BTreeSet<String> = config
-        .environment
-        .excluded_roots
-        .iter()
-        .chain(overrides.excluded_roots.iter())
-        .cloned()
-        .collect();
+    let excluded: BTreeSet<String> = unique_paths(
+        config
+            .environment
+            .excluded_roots
+            .iter()
+            .chain(overrides.excluded_roots.iter())
+            .cloned(),
+    )
+    .into_iter()
+    .collect();
 
     let cache_roots = unique_paths(
         ecosystems
@@ -112,7 +115,7 @@ pub fn build_environment_plan(
 }
 
 fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
-    if file != "package.json" {
+    if file.rsplit('/').next() != Some("package.json") {
         return content.to_vec();
     }
     // Unparseable JSON is hashed as-is; better a spurious miss than a wrong hit.
@@ -139,7 +142,7 @@ fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
         "pnpm",
     ] {
         if let Some(value) = object.get(key) {
-            relevant.insert(key.to_owned(), canonical(value));
+            relevant.insert(key.to_owned(), value.clone());
         }
     }
     if let Some(scripts) = object.get("scripts").and_then(Value::as_object) {
@@ -147,7 +150,7 @@ fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
         // Lifecycle scripts run during install, so they do shape node_modules.
         for key in ["preinstall", "install", "postinstall", "prepare"] {
             if let Some(value) = scripts.get(key) {
-                install_scripts.insert(key.to_owned(), canonical(value));
+                install_scripts.insert(key.to_owned(), value.clone());
             }
         }
         if !install_scripts.is_empty() {
@@ -155,21 +158,6 @@ fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
         }
     }
     serde_json::to_vec(&Value::Object(relevant)).unwrap_or_else(|_| content.to_vec())
-}
-
-fn canonical(value: &Value) -> Value {
-    match value {
-        Value::Array(values) => Value::Array(values.iter().map(canonical).collect()),
-        // Key order is noise; sort so equivalent manifests hash the same.
-        Value::Object(object) => {
-            let sorted: BTreeMap<String, Value> = object
-                .iter()
-                .map(|(key, value)| (key.clone(), canonical(value)))
-                .collect();
-            Value::Object(sorted.into_iter().collect())
-        }
-        _ => value.clone(),
-    }
 }
 
 fn os_major() -> String {

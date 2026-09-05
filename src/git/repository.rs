@@ -107,10 +107,8 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| "repository".to_owned());
-    // Every clone of the same remote shares one identity; only a remoteless repo is keyed by its path.
-    let identity = remote_url
-        .as_deref()
-        .unwrap_or_else(|| common_dir.to_str().unwrap_or("repository"));
+    // Worktrees share a Git common directory; independent clones of one remote do not share state.
+    let identity = common_dir.as_os_str().as_encoded_bytes();
     let remote_head = remote
         .as_deref()
         .and_then(|remote| read_remote_head(&common_dir, remote));

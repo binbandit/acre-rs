@@ -3,9 +3,11 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use process_wrap::std::StdCommandWrap;
 use wait_timeout::ChildExt;
 
 use crate::error::{AcreError, Result, exit};
@@ -56,6 +58,12 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
     // Two error paths below want the same argv attached; build it once before either can fire.
     let details = serde_json::json!({ "executable": executable, "args": args });
 
+    let mut command = StdCommandWrap::from(command);
+    #[cfg(unix)]
+    command.wrap(process_wrap::std::ProcessGroup::leader());
+    #[cfg(windows)]
+    command.wrap(process_wrap::std::JobObject);
+
     let mut child = command.spawn().map_err(|error| {
         AcreError::new(
             "ACRE_PROCESS_START_FAILED",
@@ -65,51 +73,48 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
         .with_details(&details)
     })?;
 
-    // The stdin handle closes as soon as it drops, so the child never waits on us.
-    if let (Some(input), Some(mut stdin)) = (&options.stdin, child.stdin.take()) {
-        stdin
-            .write_all(input)
-            .map_err(|error| AcreError::io(format!("could not write to {executable}"), error))?;
-    }
+    let deadline = options.timeout.map(|timeout| started + timeout);
+    let timeout_error = || {
+        AcreError::new(
+            "ACRE_PROCESS_TIMEOUT",
+            format!("{executable} exceeded its process timeout."),
+            exit::ENVIRONMENT,
+        )
+        .with_details(&details)
+    };
+    let stdin = match (options.stdin, child.stdin().take()) {
+        (Some(input), Some(mut stdin)) => Some(io_worker(move || stdin.write_all(&input))),
+        _ => None,
+    };
+    let stdout = read_pipe(child.stdout().take().expect("stdout configured as piped"));
+    let stderr = read_pipe(child.stderr().take().expect("stderr configured as piped"));
 
-    let mut stdout = child.stdout.take().expect("stdout configured as piped");
-    let mut stderr = child.stderr.take().expect("stderr configured as piped");
-    // Drain both pipes on their own threads: a child that fills stderr while we block on stdout would deadlock.
-    let stdout_thread = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stdout.read_to_end(&mut bytes);
-        bytes
-    });
-    let stderr_thread = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stderr.read_to_end(&mut bytes);
-        bytes
-    });
-
-    let status = match options.timeout {
-        Some(timeout) => match child
-            .wait_timeout(timeout)
-            .map_err(|error| AcreError::io(format!("could not wait for {executable}"), error))?
-        {
-            Some(status) => status,
-            None => {
-                // Kill and reap, or the timed-out child lingers as a zombie holding the pipes open.
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(AcreError::new(
-                    "ACRE_PROCESS_TIMEOUT",
-                    format!(
-                        "{executable} did not finish within {} seconds.",
-                        timeout.as_secs()
-                    ),
-                    exit::ENVIRONMENT,
-                )
-                .with_details(&details));
-            }
-        },
-        None => child
-            .wait()
-            .map_err(|error| AcreError::io(format!("could not wait for {executable}"), error))?,
+    let captured = (|| {
+        // Keep the parent unreaped until I/O finishes, so its process-group ID cannot be reused
+        // before timeout cleanup. All streams and the final wait share one deadline.
+        let stdout = receive_io(stdout, deadline).map_err(|()| timeout_error())??;
+        let stderr = receive_io(stderr, deadline).map_err(|()| timeout_error())??;
+        let input = stdin
+            .map(|stdin| receive_io(stdin, deadline).map_err(|()| timeout_error()))
+            .transpose()?;
+        let status = match deadline {
+            Some(deadline) => child
+                .inner_mut()
+                .wait_timeout(deadline.saturating_duration_since(Instant::now())),
+            None => child.inner_mut().wait().map(Some),
+        }
+        .map_err(|error| AcreError::io(format!("could not wait for {executable}"), error))?
+        .ok_or_else(timeout_error)?;
+        Ok((status, stdout, stderr, input))
+    })();
+    let (status, stdout, stderr, input) = match captured {
+        Ok(captured) => captured,
+        Err(error) => {
+            let _ = child.start_kill();
+            let _ = child.inner_mut().kill();
+            let _ = child.inner_mut().wait();
+            return Err(error);
+        }
     };
 
     // No code means a signal killed it; call that a plain failure rather than success.
@@ -121,16 +126,57 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
             .collect(),
         cwd: options.cwd,
         status: status_code,
-        stdout: stdout_thread.join().unwrap_or_default(),
-        stderr: stderr_thread.join().unwrap_or_default(),
+        stdout,
+        stderr,
         duration_ms: started.elapsed().as_millis(),
     };
 
     // Callers that expect a non-zero answer (rev-parse --verify, check-ignore) opt in per call.
     if options.accepted_statuses.contains(&status_code) {
+        if let Some(input) = input {
+            input?;
+        }
         Ok(result)
     } else {
         Err(process_failure(result))
+    }
+}
+
+fn io_worker<T: Send + 'static>(
+    work: impl FnOnce() -> std::io::Result<T> + Send + 'static,
+) -> Receiver<std::io::Result<T>> {
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = send.send(work());
+    });
+    receive
+}
+
+fn read_pipe(mut pipe: impl Read + Send + 'static) -> Receiver<std::io::Result<Vec<u8>>> {
+    io_worker(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).map(|_| bytes)
+    })
+}
+
+fn receive_io<T>(
+    receive: Receiver<std::io::Result<T>>,
+    deadline: Option<Instant>,
+) -> std::result::Result<Result<T>, ()> {
+    let received = match deadline {
+        Some(deadline) => receive.recv_timeout(deadline.saturating_duration_since(Instant::now())),
+        None => receive.recv().map_err(|_| RecvTimeoutError::Disconnected),
+    };
+    match received {
+        Ok(result) => {
+            Ok(result.map_err(|error| AcreError::io("could not transfer child-process data", error)))
+        }
+        Err(RecvTimeoutError::Timeout) => Err(()),
+        Err(RecvTimeoutError::Disconnected) => Ok(Err(AcreError::new(
+            "ACRE_PROCESS_IO",
+            "A child-process I/O worker failed.",
+            exit::INTERNAL,
+        ))),
     }
 }
 
@@ -139,9 +185,13 @@ pub fn run_git(cwd: &Path, args: &[&str]) -> Result<ProcessResult> {
 }
 
 pub fn run_git_with(cwd: &Path, args: &[&str], options: RunOptions) -> Result<ProcessResult> {
+    let args: Vec<&str> = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+        .into_iter()
+        .chain(args.iter().copied())
+        .collect();
     run_process(
         "git",
-        args,
+        &args,
         RunOptions {
             cwd: Some(cwd.to_path_buf()),
             ..options

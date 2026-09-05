@@ -9,12 +9,12 @@ use crate::git::repository::{Repository, discover_repository};
 use crate::git::worktrees::GitWorktree;
 use crate::model::{
     AcreConfig, RepositoryState, StoredTarget, TrustLevel, WorkspaceOwnership, WorkspaceRecord,
-    WorkspaceSlot, WorkspaceStatus,
+    WorkspaceStatus,
 };
 use crate::state::lock::{RepositoryLock, is_pid_alive};
 use crate::state::paths::{active_root, repository_lock_path, repository_state_path, slots_root};
 use crate::state::storage::{read_json, write_json};
-use crate::util::{canonical_or_absolute, is_inside, now_iso, random_short, short_hash};
+use crate::util::{canonical_or_absolute, is_inside, now_iso, short_hash};
 
 pub fn load_repository_state(config: &AcreConfig, repository: &Repository) -> Result<RepositoryState> {
     let state = match stored_repository_state(config, repository) {
@@ -29,7 +29,14 @@ pub fn stored_repository_state(config: &AcreConfig, repository: &Repository) -> 
     read_json::<RepositoryState>(&repository_state_path(config, repository))
         // A corrupt state file reads as no state; recovery rebuilds what it can from git.
         .unwrap_or_default()
-        .filter(|state| state.schema_version == 1 && state.repository_id == repository.id)
+        .filter(|state| state.schema_version == 1 && state.repository_common_dir == repository.common_dir)
+        .map(|mut state| {
+            state.repository_id.clone_from(&repository.id);
+            for workspace in &mut state.workspaces {
+                workspace.repository_id.clone_from(&repository.id);
+            }
+            state
+        })
 }
 
 pub fn save_repository_state(
@@ -49,7 +56,6 @@ pub fn empty_state(repository: &Repository) -> RepositoryState {
         repository_common_dir: repository.common_dir.clone(),
         repository_name: repository.name.clone(),
         updated_at: now_iso(),
-        target_paths: BTreeMap::new(),
         slots: Vec::new(),
         workspaces: Vec::new(),
         leases: Vec::new(),
@@ -166,28 +172,13 @@ fn recover_owned_worktrees(
 
     for worktree in &repository.worktrees {
         let path = canonical_or_absolute(&worktree.path);
-        // Only worktrees under Acre's own roots can be recovered; anything else is external.
-        if is_inside(&slots_root(config, repository), &path) && !slot_paths.contains(&path) {
-            state.slots.push(WorkspaceSlot {
-                id: path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| random_short(8)),
-                path,
-                // A slot with a branch checked out is not idle: somebody bound it and we lost the record.
-                status: if worktree.detached && worktree.exists && !worktree.prunable {
-                    WorkspaceStatus::Idle
-                } else {
-                    WorkspaceStatus::Broken
-                },
-                environment: None,
-                created_at: timestamp.clone(),
-                last_used_at: timestamp.clone(),
-            });
-            continue;
-        }
-        if is_inside(&active_root(config, repository), &path) && !workspace_paths.contains(&path) {
+        // An unrecorded worktree may hold detached commits or local data. Recover it as
+        // retained, never infer permission to recycle it from its directory or branch state.
+        if (is_inside(&active_root(config, repository), &path)
+            || is_inside(&slots_root(config, repository), &path))
+            && !slot_paths.contains(&path)
+            && !workspace_paths.contains(&path)
+        {
             let local_branch = worktree.branch.clone();
             // The id derives from the path so every load agrees on the identity of a
             // workspace that was never persisted.

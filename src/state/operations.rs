@@ -7,15 +7,17 @@ use crate::state::storage::{read_json, write_json};
 use crate::util::remove_path;
 
 pub fn save_pending_done(config: &AcreConfig, operation: &PendingDoneOperation) -> Result<()> {
-    write_json(&operation_path(config, &operation.token), operation)
+    write_json(&operation_path(config, &operation.token)?, operation)
 }
 
 pub fn read_pending_done(config: &AcreConfig, token: &str) -> Result<Option<PendingDoneOperation>> {
-    Ok(read_json::<PendingDoneOperation>(&operation_path(config, token))?
+    Ok(
+        read_json::<PendingDoneOperation>(&operation_path(config, token)?)?
         // Kind guards against a future operation type being resumed by the wrong handler.
-        .filter(|operation| operation.kind == "done"))
+        .filter(|operation| operation.schema_version == 1 && operation.kind == "done" && operation.token == token),
+    )
 }
 
 pub fn remove_pending_operation(config: &AcreConfig, token: &str) -> Result<()> {
-    remove_path(&operation_path(config, token))
+    remove_path(&operation_path(config, token)?)
 }

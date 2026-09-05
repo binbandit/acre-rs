@@ -1,6 +1,5 @@
 //! The Git mutations Acre performs: worktree lifecycle, branch binding, fetches.
 
-use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
@@ -26,42 +25,6 @@ pub fn create_detached_worktree(repository: &Repository, target_path: &Path, ref
         &repository.top_level,
         &["worktree", "add", "--detach", &path, reference],
     )?;
-    Ok(())
-}
-
-pub fn move_worktree(repository: &Repository, from: &Path, to: &Path) -> Result<()> {
-    if let Some(parent) = to.parent() {
-        ensure_directory(parent)?;
-    }
-    // Git would refuse anyway; failing early keeps the message ours.
-    if to.exists() {
-        return Err(path_exists(to));
-    }
-    let from_text = from.display().to_string();
-    let to_text = to.display().to_string();
-    let moved = run_git_with(
-        &repository.top_level,
-        &["worktree", "move", &from_text, &to_text],
-        RunOptions {
-            timeout: Some(GIT_TIMEOUT),
-            accepted_statuses: &[0, 1, 128],
-            ..RunOptions::default()
-        },
-    )?;
-    if moved.status == 0 {
-        return Ok(());
-    }
-    // With no source directory left there is nothing to move by hand.
-    if !from.exists() {
-        return Err(AcreError::new(
-            "ACRE_WORKTREE_MOVE_FAILED",
-            format!("Acre could not move {}.", from.display()),
-            exit::GIT,
-        ));
-    }
-    // Git refused (typically a locked worktree); move the directory and let Git re-link it.
-    fs::rename(from, to).map_err(|error| AcreError::io("could not move worktree directory", error))?;
-    git(&repository.top_level, &["worktree", "repair", &to_text])?;
     Ok(())
 }
 

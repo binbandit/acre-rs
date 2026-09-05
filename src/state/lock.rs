@@ -1,93 +1,54 @@
-//! The per-repository lock: an exclusive directory with an owner token, reclaimed only from dead processes.
+//! OS-backed exclusive locks, released automatically when the file closes or its process exits.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::fs::{File, OpenOptions};
+use std::path::Path;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
+use fs4::{FileExt, TryLockError};
 
 use crate::error::{AcreError, Result, exit};
-use crate::state::storage::{read_json, write_json};
-use crate::util::{ensure_directory, now_iso, random_id, remove_path};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LockOwner {
-    token: String,
-    pid: u32,
-    created_at: String,
-}
+use crate::util::ensure_directory;
 
 pub struct RepositoryLock {
-    path: PathBuf,
-    token: String,
+    _file: File,
 }
 
 impl RepositoryLock {
     pub fn acquire(path: &Path) -> Result<Self> {
-        // Long enough to outlast a slow clone in another process; a real deadlock still surfaces.
-        let timeout = Duration::from_secs(30);
         if let Some(parent) = path.parent() {
             ensure_directory(parent)?;
         }
-        let token = random_id();
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options
+            .open(path)
+            .map_err(|error| AcreError::io(format!("could not open lock {}", path.display()), error))?;
         let started = Instant::now();
         loop {
-            // mkdir is atomic on every filesystem we care about; it is the whole lock.
-            match fs::create_dir(path) {
-                Ok(()) => {
-                    let owner = LockOwner {
-                        token: token.clone(),
-                        pid: std::process::id(),
-                        created_at: now_iso(),
-                    };
-                    // The owner file is what lets a later process tell a crash from a live holder.
-                    write_json(&path.join("owner.json"), &owner)?;
-                    return Ok(Self {
-                        path: path.to_path_buf(),
-                        token,
-                    });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let owner = read_json::<LockOwner>(&path.join("owner.json"))?;
-                    // A dead owner, or no owner file five seconds after mkdir, means a crash mid-acquire.
-                    let abandoned = owner.as_ref().is_some_and(|owner| !is_pid_alive(owner.pid))
-                        || (owner.is_none() && lock_is_clearly_abandoned(path));
-                    if abandoned {
-                        // Clear it and go round again rather than taking it directly; let mkdir settle who wins.
-                        let _ = remove_path(path);
-                        continue;
-                    }
-                    if started.elapsed() >= timeout {
-                        return Err(AcreError::new(
-                            "ACRE_REPOSITORY_BUSY",
-                            "Another Acre operation is already changing this repository.",
-                            exit::CONFLICT,
-                        )
-                        .with_details(serde_json::json!({ "lockPath": path })));
-                    }
+            match FileExt::try_lock(&file) {
+                // Keep the file on disk: unlinking it would let another process lock a different inode.
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(TryLockError::WouldBlock) if started.elapsed() < Duration::from_secs(30) => {
                     thread::sleep(Duration::from_millis(50));
                 }
-                Err(error) => {
-                    return Err(AcreError::io(
-                        format!("could not acquire {}", path.display()),
-                        error,
-                    ));
+                Err(TryLockError::WouldBlock) => {
+                    return Err(AcreError::new(
+                        "ACRE_REPOSITORY_BUSY",
+                        "Another Acre operation is already changing this state.",
+                        exit::CONFLICT,
+                    )
+                    .with_details(serde_json::json!({ "lockPath": path })));
+                }
+                Err(TryLockError::Error(error)) => {
+                    return Err(AcreError::io(format!("could not lock {}", path.display()), error));
                 }
             }
-        }
-    }
-}
-
-impl Drop for RepositoryLock {
-    fn drop(&mut self) {
-        let owner = read_json::<LockOwner>(&self.path.join("owner.json"))
-            .ok()
-            .flatten();
-        // Only our own lock; if it was reclaimed from us as abandoned, the new owner keeps it.
-        if owner.as_ref().is_some_and(|owner| owner.token == self.token) {
-            let _ = remove_path(&self.path);
         }
     }
 }
@@ -121,15 +82,6 @@ pub fn is_pid_alive(pid: u32) -> bool {
     {
         false
     }
-}
-
-fn lock_is_clearly_abandoned(path: &Path) -> bool {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        // Writing owner.json takes milliseconds; a bare dir older than that is a crash, not a race.
-        .is_none_or(|age| age > Duration::from_secs(5))
 }
 
 #[cfg(test)]

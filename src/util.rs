@@ -26,9 +26,7 @@ pub fn age_millis(value: &str) -> u128 {
 }
 
 pub fn sha256(value: impl AsRef<[u8]>) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_ref());
-    hex::encode(hasher.finalize())
+    hex::encode(Sha256::digest(value.as_ref()))
 }
 
 pub fn short_hash(value: impl AsRef<[u8]>, length: usize) -> String {
@@ -139,33 +137,63 @@ pub fn validate_relative_path(value: &str) -> bool {
         return false;
     }
     // No escaping the repository: config paths are joined onto worktrees.
-    !Path::new(value).components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    })
+    let mut has_name = false;
+    for component in Path::new(value).components() {
+        match component {
+            Component::Normal(name) if !name.eq_ignore_ascii_case(".git") => has_name = true,
+            Component::CurDir => {}
+            _ => return false,
+        }
+    }
+    has_name
+}
+
+/// A relative path can be lexically safe while a checkout's symlink redirects its parent.
+pub fn has_symlink_parent(root: &Path, relative: &Path) -> Result<bool> {
+    let mut path = root.to_path_buf();
+    for component in relative.parent().into_iter().flat_map(Path::components) {
+        path.push(component);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Ok(true),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => {
+                return Err(AcreError::io(
+                    format!("could not inspect {}", path.display()),
+                    error,
+                ));
+            }
+        }
+    }
+    Ok(false)
 }
 
 pub fn ensure_directory(path: &Path) -> Result<()> {
-    fs::create_dir_all(path)
-        .map_err(|error| AcreError::io(format!("could not create {}", path.display()), error))?;
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        // State may hold copies of .env; keep it private to the user.
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+        use std::os::unix::fs::DirBuilderExt;
+        // Private from creation; never chmod an existing checkout or home directory.
+        builder.mode(0o700);
     }
-    Ok(())
+    builder
+        .create(path)
+        .map_err(|error| AcreError::io(format!("could not create {}", path.display()), error))
 }
 
 pub fn remove_path(path: &Path) -> Result<()> {
     // exists() follows symlinks; a dangling link is still ours to remove.
-    if !path.exists() && fs::symlink_metadata(path).is_err() {
-        return Ok(());
-    }
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| AcreError::io(format!("could not inspect {}", path.display()), error))?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(AcreError::io(
+                format!("could not inspect {}", path.display()),
+                error,
+            ));
+        }
+    };
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
         fs::remove_dir_all(path)
             .map_err(|error| AcreError::io(format!("could not remove {}", path.display()), error))

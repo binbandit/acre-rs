@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::error::Result;
 use crate::git::status::list_ignored_entries;
+use crate::util::has_symlink_parent;
 
 /// Where a worktree's ignored data lives: approved cache-root directories, and the
 /// Git-ignored paths that fall outside every one of them.
@@ -29,16 +30,14 @@ impl IgnoredLayout {
 /// entry is opened up when it holds nothing but cache roots, and a multi-component root such
 /// as `.next/cache` is completed inside its ignored parent.
 pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<IgnoredLayout> {
-    // Top-level roots are taken on sight, ignored or not, matching how they were always handled.
-    let mut found: BTreeSet<String> = cache_roots
-        .iter()
-        .filter(|root| worktree.join(root).exists())
-        .cloned()
-        .collect();
+    // Git's ignored listing keeps tracked files out of cache copying and cleanup.
+    let mut found = BTreeSet::new();
     let mut unknown = Vec::new();
     for entry in list_ignored_entries(worktree)? {
         let relative = entry.trim_end_matches('/');
-        if cache_roots.iter().any(|root| is_within_root(relative, root)) {
+        if cache_roots.iter().any(|root| is_within_root(relative, root))
+            && safe_cache_directory(worktree, relative)?
+        {
             found.insert(relative.to_owned());
             continue;
         }
@@ -48,12 +47,14 @@ pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<Ignore
                 found.extend(nested);
                 continue;
             }
-            found.extend(
-                cache_roots
-                    .iter()
-                    .filter_map(|root| nested_cache_root(relative, root))
-                    .filter(|nested| worktree.join(nested).is_dir()),
-            );
+            for nested in cache_roots
+                .iter()
+                .filter_map(|root| nested_cache_root(relative, root))
+            {
+                if safe_cache_directory(worktree, &nested)? {
+                    found.insert(nested);
+                }
+            }
         }
         unknown.push(entry);
     }
@@ -63,22 +64,27 @@ pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<Ignore
     })
 }
 
+fn safe_cache_directory(worktree: &Path, relative: &str) -> Result<bool> {
+    Ok(!has_symlink_parent(worktree, Path::new(relative))?
+        && fs::symlink_metadata(worktree.join(relative)).is_ok_and(|metadata| metadata.is_dir()))
+}
+
 /// Cache-root directories beneath `relative` when the directory holds nothing else, or `None`
 /// as soon as a path outside every cache root turns up.
 fn cache_roots_filling(worktree: &Path, relative: &str, cache_roots: &[String]) -> Option<Vec<String>> {
     let mut found = Vec::new();
-    for child in fs::read_dir(worktree.join(relative)).ok()?.flatten() {
-        let child_relative = format!("{relative}/{}", child.file_name().to_string_lossy());
+    for child in fs::read_dir(worktree.join(relative)).ok()? {
+        let child = child.ok()?;
+        let child_relative = format!("{relative}/{}", child.file_name().to_str()?);
+        if !child.file_type().ok()?.is_dir() {
+            return None;
+        }
         if cache_roots
             .iter()
             .any(|root| is_within_root(&child_relative, root))
         {
             found.push(child_relative);
             continue;
-        }
-        // A file or symlink outside every root: the directory is unknown data, stop looking.
-        if !child.file_type().is_ok_and(|kind| kind.is_dir()) {
-            return None;
         }
         found.extend(cache_roots_filling(worktree, &child_relative, cache_roots)?);
     }

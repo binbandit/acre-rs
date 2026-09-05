@@ -12,7 +12,7 @@ pub fn new_shell_session_id() -> String {
 }
 
 pub fn read_shell_state(config: &AcreConfig, id: &str) -> Result<Option<ShellSessionState>> {
-    read_json(&shell_state_path(config, id))
+    read_json(&shell_state_path(config, id)?)
 }
 
 pub fn record_navigation(
@@ -39,5 +39,5 @@ pub fn record_navigation(
         pid,
         updated_at: now_iso(),
     };
-    write_json(&shell_state_path(config, id), &state)
+    write_json(&shell_state_path(config, id)?, &state)
 }

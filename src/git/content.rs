@@ -3,8 +3,36 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::error::Result;
-use crate::git::runner::{RunOptions, run_git_with};
+use crate::error::{AcreError, Result, exit};
+use crate::git::runner::{RunOptions, run_git, run_git_with};
+
+/// Reads matching manifest names at every depth, including workspace packages.
+pub fn read_matching_files_at_ref(
+    cwd: &Path,
+    reference: &str,
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    let listing = run_git(cwd, &["ls-tree", "-r", "--name-only", "-z", reference])?;
+    let mut paths = Vec::new();
+    for path in listing.stdout.split(|byte| *byte == 0) {
+        let name = path.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+        if !names.iter().any(|candidate| candidate.as_bytes() == name) {
+            continue;
+        }
+        let path = std::str::from_utf8(path)
+            .ok()
+            .filter(|path| !path.contains('\n'))
+            .ok_or_else(|| {
+                AcreError::new(
+                    "ACRE_MANIFEST_PATH_UNSUPPORTED",
+                    "Manifest paths must be UTF-8 without newlines to fingerprint the environment safely.",
+                    exit::REFUSED,
+                )
+            })?;
+        paths.push(path);
+    }
+    read_files_at_ref(cwd, reference, &paths)
+}
 
 pub fn read_files_at_ref(cwd: &Path, reference: &str, files: &[&str]) -> Result<BTreeMap<String, Vec<u8>>> {
     if files.is_empty() {

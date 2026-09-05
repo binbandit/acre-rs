@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::git::repository::Repository;
 use crate::model::{AcreConfig, KnownRepository};
+use crate::state::lock::RepositoryLock;
 use crate::state::paths::repository_index_path;
 use crate::state::storage::{read_json, write_json};
 use crate::util::now_iso;
@@ -17,9 +18,10 @@ struct RepositoryIndex {
 }
 
 pub fn remember_repository(config: &AcreConfig, repository: &Repository) -> Result<()> {
+    let _lock = RepositoryLock::acquire(&repository_index_path(config).with_extension("lock"))?;
     let mut repositories = load_repository_index(config)?;
     // Replace rather than append, so a moved checkout updates its paths.
-    repositories.retain(|record| record.id != repository.id);
+    repositories.retain(|record| record.id != repository.id && record.common_dir != repository.common_dir);
     repositories.push(KnownRepository {
         id: repository.id.clone(),
         name: repository.name.clone(),

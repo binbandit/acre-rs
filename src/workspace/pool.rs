@@ -1,22 +1,26 @@
-//! The warm pool: idle detached worktrees kept ready so opening a branch costs a move, not a clone.
+//! The warm pool: stable detached worktrees with reusable dependency and build caches.
 
 use std::path::{Path, PathBuf};
 
-use crate::environment::clone::seed_environment;
+use crate::environment::clone::clone_environment;
+use crate::environment::definitions::ALL_FINGERPRINT_FILES;
 use crate::environment::fingerprint::{EnvironmentPlan, build_environment_plan};
 use crate::environment::inspect::inspect_environment;
+use crate::environment::roots::inspect_ignored;
 use crate::error::Result;
 use crate::git::operations::create_detached_worktree;
 use crate::git::refs::resolve_oid;
 use crate::git::repository::Repository;
+use crate::git::status::{in_progress_operation, read_status};
 use crate::model::{
     AcreConfig, EnvironmentSnapshot, EnvironmentState, RepositoryState, TrustLevel, WorkspaceSlot,
     WorkspaceStatus,
 };
 use crate::state::index::remember_repository;
-use crate::state::paths::slots_root;
+use crate::state::paths::active_root;
 use crate::state::repository::LockedRepository;
-use crate::util::{ensure_directory, now_iso, random_short};
+use crate::util::{ensure_directory, is_inside, now_iso, random_short};
+use crate::workspace::process::find_processes_using_path;
 
 /// Creates idle slots until `requested_slots` (or the configured minimum) are warm.
 pub fn warm_repository(
@@ -79,13 +83,7 @@ pub fn select_slot(
     let healthy: Vec<&WorkspaceSlot> = state
         .slots
         .iter()
-        .filter(|slot| {
-            // Idle in our records is not enough; the directory must still exist for git.
-            slot.status == WorkspaceStatus::Idle
-                && repository
-                    .worktree_at(&slot.path)
-                    .is_some_and(|worktree| worktree.exists)
-        })
+        .filter(|slot| idle_slot_is_safe(config, repository, slot))
         .collect();
     let chosen = healthy
         .iter()
@@ -119,29 +117,23 @@ fn create_slot(
     oid: &str,
     plan: &EnvironmentPlan,
 ) -> Result<WorkspaceSlot> {
-    ensure_directory(&slots_root(config, repository))?;
+    ensure_directory(&active_root(config, repository))?;
     let id = random_short(12);
-    let slot_path = slots_root(config, repository).join(&id);
+    let slot_path = active_root(config, repository).join(&id);
     // Detached from the start: a slot must never hold a branch that `git branch -d` would refuse to delete.
     create_detached_worktree(repository, &slot_path, oid)?;
     let mut environment = inspect_environment(&slot_path, plan)?;
-    if let Some(source) = find_environment_source(config, repository, state, plan, &slot_path)? {
+    if let Some(source) = find_environment_source(config, repository, state, plan, &slot_path) {
         // Cloning is a bonus; a slot without caches is still a usable slot.
-        if let Ok(seeded) = seed_environment(
-            &source,
-            &slot_path,
-            plan,
-            // Untrusted on purpose: a pool slot must never carry seed files.
-            TrustLevel::Untrusted,
-            &repository.top_level,
-        ) {
-            environment = seeded.snapshot;
+        if let Ok(snapshot) = clone_environment(&source, &slot_path, plan) {
+            environment = snapshot;
         }
     }
     let timestamp = now_iso();
     let slot = WorkspaceSlot {
         id,
         path: slot_path,
+        head: Some(oid.to_owned()),
         status: WorkspaceStatus::Idle,
         environment: Some(environment),
         created_at: timestamp.clone(),
@@ -159,45 +151,71 @@ pub fn find_environment_source(
     state: &RepositoryState,
     plan: &EnvironmentPlan,
     excluded_path: &Path,
-) -> Result<Option<PathBuf>> {
+) -> Option<PathBuf> {
     let matches = |environment: &Option<EnvironmentSnapshot>| {
         environment
             .as_ref()
             .is_some_and(|environment| environment.fingerprint == plan.fingerprint)
     };
-    let candidate = state
+    let candidates = state
         .workspaces
         .iter()
         // Never clone from an untrusted (fork PR) workspace, whatever its caches look like.
-        .filter(|workspace| workspace.trust == TrustLevel::Trusted && matches(&workspace.environment))
+        .filter(|workspace| workspace.status != WorkspaceStatus::Broken
+            && workspace.trust == TrustLevel::Trusted && matches(&workspace.environment))
         .map(|workspace| &workspace.path)
         .chain(
             state
                 .slots
                 .iter()
-                .filter(|slot| matches(&slot.environment))
+                .filter(|slot| slot.status == WorkspaceStatus::Idle && matches(&slot.environment))
                 .map(|slot| &slot.path),
         )
-        .find(|path| path.as_path() != excluded_path && path.exists());
-    if let Some(candidate) = candidate {
-        return Ok(Some(candidate.clone()));
+        .map(PathBuf::as_path)
+        .chain(std::iter::once(repository.primary_path()));
+    for source in candidates {
+        let Some(worktree) = repository.worktree_at(source).filter(|worktree| worktree.exists) else {
+            continue;
+        };
+        if source == excluded_path {
+            continue;
+        }
+        // A recorded fingerprint cannot describe dependencies changed since activation, whether
+        // committed or still local. Ordinary source edits do not prevent cache sharing.
+        let manifests_unchanged = read_status(source).is_ok_and(|status| {
+            status
+                .entries
+                .iter()
+                .flat_map(|entry| std::iter::once(&entry.path).chain(entry.original_path.iter()))
+                .all(|path| !ALL_FINGERPRINT_FILES.contains(&path.rsplit('/').next().unwrap_or_default()))
+        });
+        if manifests_unchanged
+            && build_environment_plan(repository, &worktree.head, config)
+                .is_ok_and(|source_plan| source_plan.fingerprint == plan.fingerprint)
+            && inspect_environment(source, plan).is_ok_and(|snapshot| !snapshot.present_roots.is_empty())
+        {
+            return Some(source.to_path_buf());
+        }
     }
+    None
+}
 
-    let primary = repository.primary_path();
-    if primary == excluded_path || !primary.exists() {
-        return Ok(None);
-    }
-    // Fingerprint the primary at its own HEAD; its caches match only if it sits on the same generation.
-    let primary_oid = repository
-        .worktrees
-        .first()
-        .map(|worktree| worktree.head.as_str())
-        .unwrap_or("HEAD");
-    let primary_plan = build_environment_plan(repository, primary_oid, config)?;
-    if primary_plan.fingerprint != plan.fingerprint {
-        return Ok(None);
-    }
-    let snapshot = inspect_environment(primary, &primary_plan)?;
-    // A primary checkout with nothing installed is not a source, just a matching plan.
-    Ok((!snapshot.present_roots.is_empty()).then(|| primary.to_path_buf()))
+/// Idle metadata alone is not permission to reset or delete a checkout someone has edited.
+pub fn idle_slot_is_safe(config: &AcreConfig, repository: &Repository, slot: &WorkspaceSlot) -> bool {
+    slot.status == WorkspaceStatus::Idle
+        && repository.worktree_at(&slot.path).is_some_and(|worktree| {
+            worktree.exists
+                && worktree.detached
+                && !worktree.locked
+                && !worktree.prunable
+                && slot.head.as_deref() == Some(worktree.head.as_str())
+        })
+        && slot.environment.as_ref().is_some_and(|environment| {
+            inspect_ignored(&slot.path, &environment.cache_roots)
+                .is_ok_and(|layout| layout.unknown.is_empty())
+        })
+        && read_status(&slot.path).is_ok_and(|status| !status.dirty)
+        && in_progress_operation(&slot.path).is_ok_and(|operation| operation.is_none())
+        && !std::env::current_dir().is_ok_and(|cwd| is_inside(&slot.path, &cwd))
+        && (!config.safety.detect_processes || find_processes_using_path(&slot.path, &[]).is_empty())
 }

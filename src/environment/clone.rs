@@ -7,17 +7,11 @@ use std::time::Duration;
 use crate::environment::fingerprint::EnvironmentPlan;
 use crate::environment::inspect::inspect_environment;
 use crate::environment::roots::inspect_ignored;
-use crate::environment::seed::seed_files_only;
 use crate::error::{AcreError, Result};
 use crate::git::runner::{RunOptions, run_process};
-use crate::model::{CloneMode, EnvironmentSnapshot, TrustLevel};
-use crate::util::{ensure_directory, remove_path};
-
-#[derive(Debug, Clone)]
-pub struct SeedResult {
-    pub snapshot: EnvironmentSnapshot,
-    pub seeded_files: Vec<String>,
-}
+use crate::git::status::is_ignored_path;
+use crate::model::{CloneMode, EnvironmentSnapshot};
+use crate::util::{ensure_directory, has_symlink_parent, remove_path};
 
 #[derive(Debug, Clone, Copy)]
 pub struct CloneReport {
@@ -26,13 +20,11 @@ pub struct CloneReport {
     pub bytes: u64,
 }
 
-pub fn seed_environment(
+pub fn clone_environment(
     source_root: &Path,
     destination_root: &Path,
     plan: &EnvironmentPlan,
-    trust: TrustLevel,
-    seed_source_root: &Path,
-) -> Result<SeedResult> {
+) -> Result<EnvironmentSnapshot> {
     let mut cloned_files = 0;
     let mut cloned_bytes = 0;
     let mut clone_mode = CloneMode::None;
@@ -40,13 +32,25 @@ pub fn seed_environment(
     // Only roots the source actually has; the plan lists what could exist, not what does.
     for cache_root in inspect_ignored(source_root, &plan.cache_roots)?.cache_roots {
         let source = source_root.join(&cache_root);
-        let destination = destination_root.join(&cache_root);
-        // The destination may hold a stale cache from a previous generation.
-        remove_path(&destination)?;
-        if let Some(parent) = destination.parent() {
-            ensure_directory(parent)?;
+        // Standard virtual environments embed installation paths. Reuse them in their stable
+        // slot, but never publish a copy whose scripts may still execute in the source checkout.
+        if source.join("pyvenv.cfg").symlink_metadata().is_ok() {
+            continue;
         }
-        let report = clone_tree(&source, &destination)?;
+        let destination = destination_root.join(&cache_root);
+        if has_symlink_parent(destination_root, Path::new(&cache_root))?
+            || !is_ignored_path(destination_root, &cache_root)?
+        {
+            continue;
+        }
+        let parent = destination.parent().expect("cache path has a worktree parent");
+        ensure_directory(parent)?;
+        // Publish only a complete clone; failures must not leave a partial cache looking ready.
+        let temporary = tempfile::tempdir_in(parent)?;
+        let cloned = temporary.path().join("cache");
+        let report = clone_tree(&source, &cloned)?;
+        remove_path(&destination)?;
+        fs::rename(&cloned, &destination)?;
         cloned_files += report.files;
         cloned_bytes += report.bytes;
         // Copy is sticky: one plain copy means the result is not honestly a reflink.
@@ -57,17 +61,12 @@ pub fn seed_environment(
         };
     }
 
-    // Seed files come from the primary, never from the cache source, which may be another branch's workspace.
-    let seeded_files = seed_files_only(seed_source_root, destination_root, &plan.seed_files, trust)?;
     let mut snapshot = inspect_environment(destination_root, plan)?;
     snapshot.source = Some(source_root.to_path_buf());
     snapshot.cloned_files = Some(cloned_files);
     snapshot.cloned_bytes = Some(cloned_bytes);
     snapshot.clone_mode = Some(clone_mode);
-    Ok(SeedResult {
-        snapshot,
-        seeded_files,
-    })
+    Ok(snapshot)
 }
 
 pub fn clear_cache_roots(root: &Path, cache_roots: &[String]) -> Result<()> {
@@ -87,6 +86,13 @@ pub fn copy_path(source: &Path, destination: &Path) -> Result<()> {
     if metadata.is_dir() {
         clone_tree(source, destination)?;
         return Ok(());
+    }
+    if !metadata.is_file() {
+        return Err(AcreError::new(
+            "ACRE_UNSUPPORTED_FILE",
+            format!("Cannot copy special file {}", source.display()),
+            crate::error::exit::REFUSED,
+        ));
     }
     fs::copy(source, destination)
         .map_err(|error| AcreError::io(format!("could not copy {}", source.display()), error))?;

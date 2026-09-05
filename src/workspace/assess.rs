@@ -6,7 +6,7 @@ use crate::environment::seed::changed_seed_files;
 use crate::error::Result;
 use crate::git::repository::{Repository, discover_repository};
 use crate::git::status::{WorkingTreeStatus, in_progress_operation, read_status};
-use crate::model::{AcreConfig, RepositoryState, WorkspaceLease, WorkspaceRecord};
+use crate::model::{AcreConfig, RepositoryState, TargetKind, WorkspaceLease, WorkspaceRecord};
 use crate::state::repository::load_repository_state;
 use crate::workspace::missing_workspace;
 use crate::workspace::process::{ProcessUse, find_processes_using_path};
@@ -19,6 +19,7 @@ pub struct DoneAssessment {
     pub status: WorkingTreeStatus,
     pub operation: Option<String>,
     pub locked: bool,
+    pub detached_commits: bool,
     pub lock_reason: Option<String>,
     pub new_ignored: Vec<String>,
     pub changed_seed_files: Vec<String>,
@@ -48,7 +49,6 @@ pub fn assess_workspace_for_return(
 #[derive(Debug, Clone, Default)]
 pub struct AssessOptions {
     pub allowed_session_id: Option<String>,
-    pub allowed_lease_id: Option<String>,
     pub ignored_pids: Vec<u32>,
 }
 
@@ -86,8 +86,10 @@ pub fn assess_workspace(
         .filter(|lease| {
             // The caller's own lease or session doesn't count against it.
             lease.workspace_id == workspace.id
-                && options.allowed_lease_id.as_deref() != Some(lease.id.as_str())
-                && options.allowed_session_id.as_deref() != lease.session_id.as_deref()
+                && options
+                    .allowed_session_id
+                    .as_ref()
+                    .is_none_or(|session| lease.session_id.as_ref() != Some(session))
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -98,11 +100,26 @@ pub fn assess_workspace(
         Vec::new()
     };
     let locked = registered.is_some_and(|worktree| worktree.locked);
+    let slot_head = workspace
+        .slot_id
+        .as_ref()
+        .and_then(|id| state.slots.iter().find(|slot| &slot.id == id))
+        .and_then(|slot| slot.head.as_deref());
+    let detached_commits = registered.is_some_and(|worktree| {
+        worktree.detached
+            && (worktree.head != workspace.target.oid
+                || workspace.slot_id.is_none()
+                || (workspace.target.kind == TargetKind::Worktree
+                    && slot_head != Some(worktree.head.as_str())))
+    });
     let lock_reason = registered
         .filter(|worktree| worktree.locked)
         .and_then(|worktree| worktree.lock_reason.clone());
     // Every reason is reported, not just the first, so the user fixes them all in one go.
     let mut reasons = Vec::new();
+    if detached_commits {
+        reasons.push("create a branch for detached commits before returning this workspace".to_owned());
+    }
     if locked {
         reasons.push(match &lock_reason {
             Some(reason) => format!("worktree is locked: {reason}"),
@@ -132,6 +149,7 @@ pub fn assess_workspace(
         status,
         operation,
         locked,
+        detached_commits,
         lock_reason,
         new_ignored,
         changed_seed_files,

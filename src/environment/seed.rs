@@ -3,64 +3,63 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
 
 use crate::environment::clone::copy_path;
-use crate::error::{AcreError, Result};
-use crate::git::runner::{RunOptions, run_git_with};
+use crate::error::{AcreError, Result, exit};
+use crate::git::status::is_ignored_path;
 use crate::model::{SeedFileSnapshot, TrustLevel};
-use crate::util::{ensure_directory, remove_path, sha256};
+use crate::util::{ensure_directory, has_symlink_parent, remove_path, sha256};
 
 pub fn seed_files_only(
     source_root: &Path,
     destination_root: &Path,
     files: &[String],
     trust: TrustLevel,
-) -> Result<Vec<String>> {
+    seeded: &mut Vec<String>,
+) -> Result<()> {
     // Fork PRs get nothing: their code could read whatever we copy in.
     if trust != TrustLevel::Trusted {
-        return Ok(Vec::new());
+        return Ok(());
     }
-    let mut seeded = Vec::new();
     for relative in files {
         let source = source_root.join(relative);
         let destination = destination_root.join(relative);
         // Never overwrite what the checkout already has, and never copy a tracked file as a "seed".
-        if !source.exists() || destination.exists() || !is_ignored_seed(source_root, relative)? {
+        if has_symlink_parent(source_root, Path::new(relative))?
+            || has_symlink_parent(destination_root, Path::new(relative))?
+            || !source.try_exists()?
+            || destination.symlink_metadata().is_ok()
+            || !is_ignored_path(source_root, relative)?
+            || !is_ignored_path(destination_root, relative)?
+        {
             continue;
         }
         if let Some(parent) = destination.parent() {
             ensure_directory(parent)?;
         }
-        match copy_path(&source, &destination) {
-            Ok(()) => seeded.push(relative.clone()),
-            // A partial copy of a secret is worse than none.
-            Err(_) => {
-                let _ = remove_path(&destination);
-            }
+        let temporary = tempfile::tempdir_in(destination.parent().expect("seed path has a worktree parent"))?;
+        let copied = temporary.path().join("seed");
+        // Failed copies are cleaned up without publishing a partial secret.
+        if copy_path(&source, &copied).is_ok() {
+            fs::rename(copied, destination)?;
+            seeded.push(relative.clone());
         }
     }
-    Ok(seeded)
+    Ok(())
 }
 pub fn clear_seed_files(root: &Path, files: &[String]) -> Result<()> {
     for relative in files {
+        if has_symlink_parent(root, Path::new(relative))? {
+            return Err(AcreError::new(
+                "ACRE_UNSAFE_PATH",
+                format!("Cannot remove seed file through a symlink: {relative}"),
+                exit::REFUSED,
+            ));
+        }
         remove_path(&root.join(relative))?;
     }
     Ok(())
 }
-fn is_ignored_seed(source_root: &Path, relative: &str) -> Result<bool> {
-    let result = run_git_with(
-        source_root,
-        &["check-ignore", "--quiet", "--", relative],
-        RunOptions {
-            timeout: Some(Duration::from_secs(10)),
-            accepted_statuses: &[0, 1, 128],
-            ..RunOptions::default()
-        },
-    )?;
-    Ok(result.status == 0)
-}
-
 pub fn snapshot_seed_files(root: &Path, files: &[String]) -> Result<Vec<SeedFileSnapshot>> {
     let mut snapshots = Vec::new();
     for relative in files {
@@ -78,7 +77,9 @@ pub fn changed_seed_files(root: &Path, baseline: &[SeedFileSnapshot]) -> Result<
     let mut changed = Vec::new();
     for snapshot in baseline {
         // A deleted seed file counts as changed too; the user may have moved secrets out on purpose.
-        if seed_path_hash(&root.join(&snapshot.path))?.as_deref() != Some(&snapshot.hash) {
+        if has_symlink_parent(root, Path::new(&snapshot.path))?
+            || seed_path_hash(&root.join(&snapshot.path))?.as_deref() != Some(&snapshot.hash)
+        {
             changed.push(snapshot.path.clone());
         }
     }
@@ -117,8 +118,7 @@ fn seed_path_hash(target: &Path) -> Result<Option<String>> {
         pieces.extend_from_slice(format!("directory\0{}\0", permission_marker(&metadata)).as_bytes());
         let mut entries: Vec<_> = fs::read_dir(target)
             .map_err(|error| AcreError::io(format!("could not read {}", target.display()), error))?
-            .filter_map(std::result::Result::ok)
-            .collect();
+            .collect::<std::io::Result<_>>()?;
         // Directory order is filesystem-dependent; sort so the hash is stable.
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {

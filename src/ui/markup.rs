@@ -31,10 +31,6 @@ pub fn escape_markup(value: &str) -> String {
 }
 
 pub fn render_markup(value: &str, color: bool) -> String {
-    transform(value, color)
-}
-
-fn transform(value: &str, color: bool) -> String {
     let mut output = String::with_capacity(value.len());
     let mut active: Vec<&str> = Vec::new();
     let bytes = value.as_bytes();

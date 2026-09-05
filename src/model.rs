@@ -2,7 +2,6 @@
 //!
 //! Types that only live in memory sit next to the code that produces them.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -110,9 +109,6 @@ pub struct RepositoryState {
     pub repository_common_dir: PathBuf,
     pub repository_name: String,
     pub updated_at: String,
-    // Remembered so a branch reopens at the same directory, and two targets never share one.
-    #[serde(default)]
-    pub target_paths: BTreeMap<String, PathBuf>,
     #[serde(default)]
     pub slots: Vec<WorkspaceSlot>,
     #[serde(default)]
@@ -126,6 +122,8 @@ pub struct RepositoryState {
 pub struct WorkspaceSlot {
     pub id: String,
     pub path: PathBuf,
+    #[serde(default)]
+    pub head: Option<String>,
     pub status: WorkspaceStatus,
     pub environment: Option<EnvironmentSnapshot>,
     pub created_at: String,

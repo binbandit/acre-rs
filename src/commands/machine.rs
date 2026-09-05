@@ -11,7 +11,7 @@ use crate::ui::output::Renderer;
 use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
 use crate::workspace::assess::AssessOptions;
 use crate::workspace::lease::{LeaseRequest, release_workspace_lease};
-use crate::workspace::release::{ReturnOptions, return_workspace};
+use crate::workspace::release::return_workspace;
 use crate::workspace::resolve::{resolve_existing_target, resolve_new_target};
 
 pub fn acquire(
@@ -109,13 +109,9 @@ pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> R
                 &config,
                 &repository,
                 &workspace.id,
-                &ReturnOptions {
-                    assessment: AssessOptions {
-                        allowed_session_id: None,
-                        allowed_lease_id: None,
-                        ignored_pids: vec![std::process::id()],
-                    },
-                    remove_lease_id: None,
+                &AssessOptions {
+                    allowed_session_id: None,
+                    ignored_pids: vec![std::process::id()],
                 },
             )?;
             retained = !result.returned;

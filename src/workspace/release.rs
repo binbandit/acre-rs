@@ -1,30 +1,20 @@
 //! Returns a workspace: proves it safe, then pools its slot or removes the worktree.
 
-use std::path::{Path, PathBuf};
-
 use crate::environment::fingerprint::build_environment_plan;
 use crate::environment::inspect::inspect_environment;
 use crate::environment::seed::{clear_seed_files, seed_files_only};
 use crate::error::{AcreError, Result, exit};
-use crate::git::operations::{
-    create_detached_worktree, detach_workspace, move_worktree, remove_worktree, restore_stored_target,
-};
+use crate::git::operations::{detach_workspace, remove_worktree, restore_stored_target};
 use crate::git::repository::Repository;
 use crate::model::{
     AcreConfig, CloneMode, EnvironmentSnapshot, EnvironmentState, RepositoryState, TrustLevel,
     WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
 };
-use crate::state::paths::slots_root;
 use crate::state::repository::{LockedRepository, save_repository_state};
-use crate::util::{now_iso, remove_path};
+use crate::util::now_iso;
 use crate::workspace::assess::{AssessOptions, DoneAssessment, assess_workspace};
+use crate::workspace::pool::idle_slot_is_safe;
 use crate::workspace::{lease, missing_workspace};
-
-#[derive(Debug, Clone, Default)]
-pub struct ReturnOptions {
-    pub assessment: AssessOptions,
-    pub remove_lease_id: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 pub struct ReturnResult {
@@ -38,7 +28,7 @@ pub fn return_workspace(
     config: &AcreConfig,
     repository: &Repository,
     workspace_id: &str,
-    options: &ReturnOptions,
+    options: &AssessOptions,
 ) -> Result<ReturnResult> {
     let mut locked = LockedRepository::open(config, repository)?;
     let repository = locked.repository.clone();
@@ -50,12 +40,8 @@ pub fn return_workspace(
         .cloned()
         .ok_or_else(|| missing_workspace(workspace_id))?;
 
-    // The machine caller's own lease goes first, so it can't block its own release.
-    if let Some(lease_id) = &options.remove_lease_id {
-        lease::release(state, lease_id)?;
-    }
     // The caller's own shell lease must not count as "someone else is using it".
-    if let Some(session_id) = &options.assessment.allowed_session_id {
+    if let Some(session_id) = &options.allowed_session_id {
         lease::release_session(state, session_id, Some(&workspace.id));
     }
 
@@ -63,13 +49,7 @@ pub fn return_workspace(
     if workspace.ownership == WorkspaceOwnership::External {
         forget_workspace(state, &workspace.id);
         locked.save(config)?;
-        let assessment = assess_workspace(
-            &repository,
-            &locked.state,
-            &workspace,
-            config,
-            &options.assessment,
-        )?;
+        let assessment = assess_workspace(&repository, &locked.state, &workspace, config, options)?;
         return Ok(ReturnResult {
             assessment,
             returned: false,
@@ -78,7 +58,7 @@ pub fn return_workspace(
         });
     }
 
-    let assessment = assess_workspace(&repository, state, &workspace, config, &options.assessment)?;
+    let assessment = assess_workspace(&repository, state, &workspace, config, options)?;
     // Refusing still saves: the lease changes above must stick.
     if !assessment.safe {
         locked.save(config)?;
@@ -104,18 +84,8 @@ pub fn return_workspace(
     let slot = slot_to_keep(config, &repository, state, &workspace, &environment);
     let pooled = slot.is_some();
 
-    // Set once the worktree has moved, so restore knows where to fetch it back from.
-    let mut moved_to = None;
-    if let Err(error) = pool_or_remove(
-        config,
-        &repository,
-        state,
-        &workspace,
-        environment,
-        slot,
-        &mut moved_to,
-    ) {
-        let _ = restore_workspace(&repository, &workspace, moved_to.as_deref());
+    if let Err(error) = pool_or_remove(config, &repository, state, &workspace, environment, slot) {
+        let _ = restore_workspace(&repository, &workspace);
         return Err(error);
     }
     Ok(ReturnResult {
@@ -164,7 +134,10 @@ fn slot_to_keep(
     }
     if idle.len() >= config.pool.max_slots {
         // Full pool: evict the stalest idle slot to make room, but only if git lets it go.
-        let victim = idle.iter().min_by_key(|slot| &slot.last_used_at)?;
+        let victim = idle
+            .iter()
+            .filter(|slot| idle_slot_is_safe(config, repository, slot))
+            .min_by_key(|slot| &slot.last_used_at)?;
         if remove_worktree(repository, &victim.path, false).is_err() {
             return None;
         }
@@ -173,8 +146,7 @@ fn slot_to_keep(
     Some(slot)
 }
 
-/// Detaches the branch, then either moves the worktree back into the pool as `slot` or removes
-/// it. `moved_to` reports the pool path once the move happened so a failure can be undone.
+/// Detaches the branch, then keeps the prepared worktree in place or removes it.
 fn pool_or_remove(
     config: &AcreConfig,
     repository: &Repository,
@@ -182,26 +154,20 @@ fn pool_or_remove(
     workspace: &WorkspaceRecord,
     environment: EnvironmentSnapshot,
     slot: Option<WorkspaceSlot>,
-    moved_to: &mut Option<PathBuf>,
 ) -> Result<()> {
     // Detach first so the branch is free to be checked out elsewhere immediately.
     detach_workspace(&workspace.path)?;
     match slot {
         Some(mut slot) => {
-            let idle_path = slots_root(config, repository).join(&slot.id);
-            // A leftover directory at the slot path (a crashed earlier return) would block the move.
-            if idle_path.exists() {
-                remove_path(&idle_path)?;
-            }
-            move_worktree(repository, &workspace.path, &idle_path)?;
-            *moved_to = Some(idle_path.clone());
             // Secrets never sit in the pool: the next occupant could be an untrusted PR.
-            clear_seed_files(&idle_path, &workspace.seeded_paths)?;
-            slot.path = idle_path.clone();
+            clear_seed_files(&workspace.path, &workspace.seeded_paths)?;
+            slot.head = repository
+                .worktree_at(&workspace.path)
+                .map(|worktree| worktree.head.clone());
             slot.status = WorkspaceStatus::Idle;
             // Recorded as Reuse from its own path: the next opener finds these caches in place.
             slot.environment = Some(EnvironmentSnapshot {
-                source: Some(idle_path),
+                source: Some(workspace.path.clone()),
                 clone_mode: Some(CloneMode::Reuse),
                 ..environment
             });
@@ -227,20 +193,10 @@ fn forget_workspace(state: &mut RepositoryState, workspace_id: &str) {
     state.leases.retain(|lease| lease.workspace_id != workspace_id);
 }
 
-/// Rebuilds the workspace at its active path after a failed return, so the user loses nothing.
-fn restore_workspace(
-    repository: &Repository,
-    workspace: &WorkspaceRecord,
-    moved_to: Option<&Path>,
-) -> Result<()> {
-    if let Some(moved_to) = moved_to {
-        if moved_to.exists() && !workspace.path.exists() {
-            move_worktree(repository, moved_to, &workspace.path)?;
-        }
-    }
-    // If even the move-back failed, rebuild the worktree from scratch at the same commit.
+/// Restores the branch and seed files after a failed return.
+fn restore_workspace(repository: &Repository, workspace: &WorkspaceRecord) -> Result<()> {
     if !workspace.path.exists() {
-        create_detached_worktree(repository, &workspace.path, &workspace.target.oid)?;
+        return Ok(());
     }
     // Re-bind the branch we detached, so the user finds the workspace as they left it.
     restore_stored_target(&workspace.path, &workspace.target)?;
@@ -249,6 +205,7 @@ fn restore_workspace(
         &workspace.path,
         &workspace.seeded_paths,
         workspace.trust,
+        &mut Vec::new(),
     );
     Ok(())
 }

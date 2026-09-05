@@ -85,7 +85,7 @@ pub fn resolve_existing_target(
     }
     let refs = list_refs(&repository.top_level)?;
     // `remote:` skips local branches on purpose: the user is asking for the remote's copy.
-    if typed.kind != SelectorKind::Remote {
+    if matches!(typed.kind, SelectorKind::Auto | SelectorKind::Branch) {
         if let Some(local) = refs
             .iter()
             .find(|reference| reference.kind == GitRefKind::Local && reference.short_name == value)
@@ -185,6 +185,9 @@ fn worktree_target(
 
 /// A branch on exactly one remote, named either `remote/branch` or just `branch`.
 fn remote_branch_target(refs: &[GitRef], typed: &TypedSelector) -> Result<Option<ResolvedTarget>> {
+    if typed.kind == SelectorKind::Worktree {
+        return Ok(None);
+    }
     let value = typed.value.as_str();
     let remotes = || {
         refs.iter()
@@ -192,8 +195,6 @@ fn remote_branch_target(refs: &[GitRef], typed: &TypedSelector) -> Result<Option
     };
     let matches: Vec<&GitRef> = match remotes().find(|reference| reference.qualified_name() == value) {
         Some(explicit) => vec![explicit],
-        // `worktree:` never falls through to remotes; a path is a path.
-        None if typed.kind == SelectorKind::Worktree => Vec::new(),
         None => remotes()
             .filter(|reference| reference.short_name == value)
             .collect(),

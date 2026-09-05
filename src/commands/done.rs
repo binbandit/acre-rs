@@ -18,7 +18,7 @@ use crate::ui::output::Renderer;
 use crate::util::{canonical_or_absolute, is_inside, now_iso, random_id};
 use crate::workspace::assess::{AssessOptions, DoneAssessment, assess_workspace_for_return};
 use crate::workspace::lease::release_shell_session_lease;
-use crate::workspace::release::{ReturnOptions, return_workspace};
+use crate::workspace::release::return_workspace;
 use crate::workspace::resolve::resolve_existing_target;
 
 pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
@@ -126,22 +126,13 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
     // Our own pid and the wrapper shell's are expected in the directory; anything else counts.
     let assess = AssessOptions {
         allowed_session_id: context.shell.session_id.clone(),
-        allowed_lease_id: None,
         ignored_pids: [Some(std::process::id()), context.shell.pid]
             .into_iter()
             .flatten()
             .collect(),
     };
     if !is_current {
-        let result = return_workspace(
-            &config,
-            &repository,
-            &workspace.id,
-            &ReturnOptions {
-                assessment: assess,
-                remove_lease_id: None,
-            },
-        )?;
+        let result = return_workspace(&config, &repository, &workspace.id, &assess)?;
         if !result.returned {
             render_unsafe(context, &result.assessment);
             return Ok(exit::REFUSED);
@@ -202,6 +193,13 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
             exit::NOT_FOUND,
         )
     })?;
+    if !context.shell.active || context.shell.session_id != operation.current_session_id {
+        return Err(AcreError::new(
+            "ACRE_OPERATION_SESSION_MISMATCH",
+            "Only the shell that started this operation can resume it.",
+            exit::REFUSED,
+        ));
+    }
     // The shell has already moved, so rediscover from the stored common dir rather than the cwd.
     let repository = discover_repository_from_common_dir(&operation.repository_common_dir)?;
     let state = load_repository_state(&config, &repository)?;
@@ -217,6 +215,13 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
                 exit::CONFLICT,
             )
         })?;
+    if is_inside(&workspace.path, &context.cwd) || is_inside(&workspace.path, &std::env::current_dir()?) {
+        return Err(AcreError::new(
+            "ACRE_SHELL_STILL_INSIDE",
+            "Move the shell out of the workspace before resuming this operation.",
+            exit::REFUSED,
+        ));
+    }
     let registered = repository.worktree_at(&workspace.path);
     let status = read_status(&workspace.path)?;
     // Anything that happened between the two phases voids the earlier assessment.
@@ -235,16 +240,12 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
         &config,
         &repository,
         &workspace.id,
-        &ReturnOptions {
-            assessment: AssessOptions {
-                allowed_session_id: operation.current_session_id,
-                allowed_lease_id: None,
-                ignored_pids: [Some(std::process::id()), context.shell.pid]
-                    .into_iter()
-                    .flatten()
-                    .collect(),
-            },
-            remove_lease_id: None,
+        &AssessOptions {
+            allowed_session_id: operation.current_session_id,
+            ignored_pids: [Some(std::process::id()), context.shell.pid]
+                .into_iter()
+                .flatten()
+                .collect(),
         },
     )?;
     remove_pending_operation(&config, token)?;
@@ -334,6 +335,9 @@ fn render_unsafe(context: &CommandContext, assessment: &DoneAssessment) {
             Some(reason) => format!("  worktree locked: {}", renderer.value(reason)),
             None => "  worktree locked".to_owned(),
         });
+    }
+    if assessment.detached_commits {
+        renderer.line("  create a branch for detached commits before returning this workspace");
     }
     render_entries(&renderer, "ignored", &assessment.new_ignored);
     render_entries(&renderer, "changed local file", &assessment.changed_seed_files);

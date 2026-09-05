@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::error::Result;
-use crate::git::runner::run_git;
+use crate::git::runner::{RunOptions, run_git, run_git_with};
 use crate::util::sha256;
 use serde::{Deserialize, Serialize};
 
@@ -193,6 +193,19 @@ pub fn list_ignored_entries(cwd: &Path) -> Result<Vec<String>> {
         .collect();
     entries.sort();
     Ok(entries)
+}
+
+pub fn is_ignored_path(cwd: &Path, relative: &str) -> Result<bool> {
+    let result = run_git_with(
+        cwd,
+        &["check-ignore", "--quiet", "--", relative],
+        RunOptions {
+            timeout: Some(std::time::Duration::from_secs(10)),
+            accepted_statuses: &[0, 1],
+            ..RunOptions::default()
+        },
+    )?;
+    Ok(result.status == 0)
 }
 
 #[cfg(test)]

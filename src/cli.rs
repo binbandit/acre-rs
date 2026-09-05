@@ -263,6 +263,9 @@ pub fn run() -> i32 {
 }
 
 fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
+    if let Some(id) = &context.shell.session_id {
+        crate::state::paths::validate_state_id(id)?;
+    }
     match cli.command {
         None => commands::open::run(context, cli.target.as_deref(), &cli.program),
         Some(Command::New(args)) => {

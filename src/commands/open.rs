@@ -90,7 +90,9 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
     let target = resolve_existing_target(&repository, &state, &selector)?;
     // A shell keeps its lease until it leaves; a one-off command releases it when it exits.
     let lease = if child_argv.is_empty() {
-        LeaseRequest::for_shell(&context.shell)
+        (!context.global.json)
+            .then(|| LeaseRequest::for_shell(&context.shell))
+            .flatten()
     } else {
         Some(LeaseRequest {
             holder: format!("command:{}", std::process::id()),

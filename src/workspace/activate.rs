@@ -1,29 +1,25 @@
-//! Opens a target in a warm workspace: pick a slot, move it into place, bind the branch, seed
-//! caches and local files, and record the result.
+//! Opens a target in a stable workspace, reusing compatible caches and seeding local files.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use crate::environment::clone::{clear_cache_roots, seed_environment};
+use crate::environment::clone::{clear_cache_roots, clone_environment};
 use crate::environment::fingerprint::{EnvironmentPlan, build_environment_plan};
 use crate::environment::inspect::inspect_environment;
 use crate::environment::roots::inspect_ignored;
 use crate::environment::seed::{clear_seed_files, seed_files_only, snapshot_seed_files};
 use crate::error::{AcreError, Result, exit};
-use crate::git::operations::{
-    bind_target, delete_branch_if_expected, detach_workspace, move_worktree, reset_workspace,
-};
+use crate::git::operations::{bind_target, delete_branch_if_expected, detach_workspace, reset_workspace};
 use crate::git::repository::Repository;
 use crate::model::{
     AcreConfig, CloneMode, EnvironmentSnapshot, RepositoryState, StoredTarget, TargetKind, WorkspaceLease,
     WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
 };
 use crate::state::index::remember_repository;
-use crate::state::paths::active_root;
 use crate::state::repository::{LockedRepository, save_repository_state};
-use crate::util::{branch_slug, canonical_or_absolute, ensure_directory, now_iso, random_short, short_hash};
+use crate::util::{canonical_or_absolute, now_iso, random_short};
 use crate::workspace::lease::{self, LeaseRequest};
 use crate::workspace::pool::{find_environment_source, idle_slot_count, select_slot};
 use crate::workspace::resolve::ResolvedTarget;
@@ -60,15 +56,24 @@ pub fn materialize_workspace(
 
     // An existing worktree, Acre-owned or not, is opened where it already is.
     if let Some(existing) = &target.existing_worktree {
-        // An existing worktree we've never seen becomes an external record: observed, never mutated.
-        let workspace = match state.workspace_at(&existing.path) {
-            Some(workspace) => workspace.clone(),
-            None => {
-                let workspace = external_workspace(&repository, target, &existing.path);
-                state.workspaces.push(workspace.clone());
-                workspace
-            }
-        };
+        // Reopening a known slot reserves it; other unrecorded worktrees remain external.
+        let workspace =
+            match state.workspace_at(&existing.path) {
+                Some(workspace) => workspace.clone(),
+                None => {
+                    let mut workspace = external_workspace(&repository, target, &existing.path);
+                    if let Some(slot) = state.slots.iter_mut().find(|slot| {
+                        canonical_or_absolute(&slot.path) == canonical_or_absolute(&existing.path)
+                    }) {
+                        workspace.ownership = WorkspaceOwnership::Acre;
+                        workspace.slot_id = Some(slot.id.clone());
+                        workspace.environment = slot.environment.clone();
+                        slot.status = WorkspaceStatus::Active;
+                    }
+                    state.workspaces.push(workspace.clone());
+                    workspace
+                }
+            };
         let lease = options
             .lease
             .as_ref()
@@ -122,6 +127,10 @@ pub fn materialize_workspace(
     // The plan comes from the target commit's manifests, not from whatever the primary has checked out.
     let plan = build_environment_plan(&repository, &target.oid, config)?;
     let slot = select_slot(config, &repository, state, &plan, &target.oid)?;
+    // Withdraw the slot before changing files. A crash or failed activation then recovers it
+    // as retained, never as an idle slot with an obsolete cache fingerprint.
+    state.slots.retain(|candidate| candidate.id != slot.id);
+    save_repository_state(config, &repository, state)?;
     let reused = slot
         .environment
         .as_ref()
@@ -140,11 +149,7 @@ pub fn materialize_workspace(
         clear_cache_roots(&slot.path, &roots)?;
         reset_workspace(&slot.path, &target.oid)?;
     }
-    let active_path = choose_active_path(config, &repository, target, state)?;
-    // Remember where it came from: on failure the slot goes back there.
-    let idle_path = slot.path.clone();
-    // Move before binding: the branch should never be visible at a pool path.
-    move_worktree(&repository, &idle_path, &active_path)?;
+    let active_path = slot.path.clone();
 
     // Filled by activate as it copies, so the rollback below knows exactly what to remove.
     let mut seeded_paths = Vec::new();
@@ -163,7 +168,7 @@ pub fn materialize_workspace(
     let (workspace, lease) = match activation {
         Ok(activated) => activated,
         Err(error) => {
-            rollback(&repository, target, &active_path, &idle_path, &seeded_paths);
+            rollback(&repository, target, &active_path, &seeded_paths);
             return Err(error);
         }
     };
@@ -207,25 +212,27 @@ fn activate(
     let seed_source = repository.primary_path();
     // Three ways to arrive at caches: already in the slot, cloned from a sibling, or none yet.
     let environment = if reused {
-        *seeded_paths = seed_files_only(seed_source, active_path, &plan.seed_files, target.trust)?;
         EnvironmentSnapshot {
             source: Some(slot.path.clone()),
             clone_mode: Some(CloneMode::Reuse),
             ..inspect_environment(active_path, plan)?
         }
-    } else if let Some(source) = find_environment_source(config, repository, state, plan, active_path)? {
-        match seed_environment(&source, active_path, plan, target.trust, seed_source) {
-            Ok(seeded) => {
-                *seeded_paths = seeded.seeded_files;
-                seeded.snapshot
-            }
+    } else if let Some(source) = find_environment_source(config, repository, state, plan, active_path) {
+        match clone_environment(&source, active_path, plan) {
+            Ok(snapshot) => snapshot,
             // A failed clone is not fatal: the workspace opens cold and the user installs as usual.
             Err(_) => inspect_environment(active_path, plan)?,
         }
     } else {
-        *seeded_paths = seed_files_only(seed_source, active_path, &plan.seed_files, target.trust)?;
         inspect_environment(active_path, plan)?
     };
+    seed_files_only(
+        seed_source,
+        active_path,
+        &plan.seed_files,
+        target.trust,
+        seeded_paths,
+    )?;
 
     // Whatever is ignored now was ours; only additions count against `done` later.
     let baseline_ignored = inspect_ignored(active_path, &environment.cache_roots)?.unknown;
@@ -248,14 +255,12 @@ fn activate(
         activated_at: timestamp.clone(),
         last_used_at: timestamp.clone(),
     };
-    // The slot record follows the directory: it is the same worktree, now active.
-    slot.path = active_path.to_path_buf();
+    // The directory stays in place; the slot is now active.
+    slot.head = Some(target.oid.clone());
     slot.status = WorkspaceStatus::Active;
     slot.environment = Some(environment);
     slot.last_used_at = timestamp;
-    if let Some(existing) = state.slots.iter_mut().find(|candidate| candidate.id == slot.id) {
-        *existing = slot;
-    }
+    state.slots.push(slot);
     let active_key = canonical_or_absolute(active_path);
     state
         .workspaces
@@ -271,20 +276,12 @@ fn activate(
     Ok((workspace, lease))
 }
 
-/// Puts a half-activated slot back where it came from and removes any branch created for it.
-fn rollback(
-    repository: &Repository,
-    target: &ResolvedTarget,
-    active_path: &Path,
-    idle_path: &Path,
-    seeded_paths: &[String],
-) {
+/// Scrubs a half-activated slot and removes any branch created for it.
+fn rollback(repository: &Repository, target: &ResolvedTarget, active_path: &Path, seeded_paths: &[String]) {
     if active_path.exists() {
         let _ = detach_workspace(active_path);
-        let _ = clear_seed_files(active_path, seeded_paths);
-        // The slot path is normally empty after the move; if something reclaimed it, leave both alone.
-        if !idle_path.exists() {
-            let _ = move_worktree(repository, active_path, idle_path);
+        if clear_seed_files(active_path, seeded_paths).is_err() {
+            return;
         }
     }
     // Only branches we created ourselves, and delete_branch_if_expected still refuses if they moved.
@@ -314,61 +311,6 @@ fn materialized(
         elapsed_ms: started.elapsed().as_millis(),
         lease,
     }
-}
-
-/// A stable directory for the target under the repository's workspaces root, remembered so the
-/// same branch always lands in the same place.
-fn choose_active_path(
-    config: &AcreConfig,
-    repository: &Repository,
-    target: &ResolvedTarget,
-    state: &mut RepositoryState,
-) -> Result<PathBuf> {
-    let root = active_root(config, repository);
-    ensure_directory(&root)?;
-    let key = target_path_key(target);
-    if let Some(path) = state.target_paths.get(&key) {
-        // The remembered path is free again, so the branch lands where it lived last time.
-        if !path.exists() {
-            return Ok(path.clone());
-        }
-    }
-    // Branch name first, then PR number, then whatever the target is called.
-    let name = target
-        .local_branch
-        .clone()
-        .or_else(|| {
-            target
-                .pull_request
-                .as_ref()
-                .map(|pull_request| format!("pr-{}", pull_request.number))
-        })
-        .unwrap_or_else(|| target.display_name.clone());
-    let base = root.join(branch_slug(&name));
-    // Another target may own the same slug (feature/x vs feature-x); never share a directory.
-    let reserved: BTreeSet<PathBuf> = state
-        .target_paths
-        .iter()
-        .filter(|(stored_key, _)| *stored_key != &key)
-        .map(|(_, path)| canonical_or_absolute(path))
-        .collect();
-    let chosen = if !base.exists() && !reserved.contains(&canonical_or_absolute(&base)) {
-        base
-    } else {
-        PathBuf::from(format!("{}--{}", base.display(), short_hash(&key, 6)))
-    };
-    state.target_paths.insert(key, chosen.clone());
-    Ok(chosen)
-}
-
-fn target_path_key(target: &ResolvedTarget) -> String {
-    if let Some(branch) = &target.local_branch {
-        return format!("branch:{branch}");
-    }
-    if let Some(pull_request) = &target.pull_request {
-        return format!("pr:{}:{}", pull_request.repository, pull_request.number);
-    }
-    format!("oid:{}", target.oid)
 }
 
 fn external_workspace(repository: &Repository, target: &ResolvedTarget, path: &Path) -> WorkspaceRecord {

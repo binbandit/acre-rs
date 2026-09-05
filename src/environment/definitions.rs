@@ -5,14 +5,12 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy)]
 pub struct EcosystemDefinition {
     pub id: &'static str,
-    pub label: &'static str,
-    pub fingerprint_files: &'static [&'static str],
     pub cache_roots: &'static [&'static str],
     pub required_roots: &'static [&'static str],
     pub seed_files: &'static [&'static str],
 }
 
-// Every file any ecosystem looks at, read in one git call; each definition then picks its own.
+// Manifest names fingerprinted at every depth, including toolchain files shared across ecosystems.
 pub const ALL_FINGERPRINT_FILES: &[&str] = &[
     "package.json",
     "pnpm-lock.yaml",
@@ -45,107 +43,54 @@ pub const ALL_FINGERPRINT_FILES: &[&str] = &[
 
 const PNPM: EcosystemDefinition = EcosystemDefinition {
     id: "pnpm",
-    label: "pnpm",
-    fingerprint_files: &[
-        "package.json",
-        "pnpm-lock.yaml",
-        ".nvmrc",
-        ".node-version",
-        ".tool-versions",
-        "mise.toml",
-    ],
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
     seed_files: &[".env", ".env.local"],
 };
 const YARN: EcosystemDefinition = EcosystemDefinition {
     id: "yarn",
-    label: "Yarn",
-    fingerprint_files: &[
-        "package.json",
-        "yarn.lock",
-        ".nvmrc",
-        ".node-version",
-        ".yarnrc.yml",
-    ],
     cache_roots: &["node_modules", ".yarn/cache", ".yarn/unplugged"],
     required_roots: &["node_modules"],
     seed_files: &[".env", ".env.local"],
 };
 const NPM: EcosystemDefinition = EcosystemDefinition {
     id: "npm",
-    label: "npm",
-    fingerprint_files: &[
-        "package.json",
-        "package-lock.json",
-        "npm-shrinkwrap.json",
-        ".nvmrc",
-        ".node-version",
-    ],
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
     seed_files: &[".env", ".env.local"],
 };
 const BUN: EcosystemDefinition = EcosystemDefinition {
     id: "bun",
-    label: "Bun",
-    fingerprint_files: &["package.json", "bun.lock", "bun.lockb"],
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
     seed_files: &[".env", ".env.local"],
 };
 const TURBO: EcosystemDefinition = EcosystemDefinition {
     id: "turbo",
-    label: "Turborepo",
-    fingerprint_files: &["turbo.json", "package.json"],
     cache_roots: &[".turbo"],
     required_roots: &[],
     seed_files: &[],
 };
 const NEXT: EcosystemDefinition = EcosystemDefinition {
     id: "next",
-    label: "Next.js",
-    fingerprint_files: &[
-        "package.json",
-        "next.config.js",
-        "next.config.mjs",
-        "next.config.ts",
-    ],
     cache_roots: &[".next/cache"],
     required_roots: &[],
     seed_files: &[],
 };
 const RUST: EcosystemDefinition = EcosystemDefinition {
     id: "rust",
-    label: "Rust",
-    fingerprint_files: &[
-        "Cargo.toml",
-        "Cargo.lock",
-        "rust-toolchain",
-        "rust-toolchain.toml",
-    ],
     cache_roots: &["target"],
     required_roots: &[],
     seed_files: &[".env", ".env.local"],
 };
 const PYTHON: EcosystemDefinition = EcosystemDefinition {
     id: "python",
-    label: "Python",
-    fingerprint_files: &[
-        "pyproject.toml",
-        "uv.lock",
-        "poetry.lock",
-        "requirements.txt",
-        ".python-version",
-    ],
     cache_roots: &[".venv", ".pytest_cache", ".mypy_cache", ".ruff_cache"],
     required_roots: &[".venv"],
     seed_files: &[".env", ".env.local"],
 };
 const GO: EcosystemDefinition = EcosystemDefinition {
     id: "go",
-    label: "Go",
-    fingerprint_files: &["go.mod", "go.sum"],
     cache_roots: &[],
     required_roots: &[],
     seed_files: &[".env", ".env.local"],
@@ -153,21 +98,31 @@ const GO: EcosystemDefinition = EcosystemDefinition {
 
 pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefinition> {
     let mut result = Vec::new();
-    // Substring checks on the raw text: cheap, and a false positive only adds a harmless cache root.
     let package_json = files
         .get("package.json")
-        .map(|value| String::from_utf8_lossy(value))
+        .and_then(|value| serde_json::from_slice::<serde_json::Value>(value).ok())
         .unwrap_or_default();
+    let package_manager = package_json["packageManager"]
+        .as_str()
+        .and_then(|value| value.split('@').next())
+        .unwrap_or_default();
+    let has_dependency = |name: &str| {
+        [
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+        ]
+        .iter()
+        .any(|section| package_json[section].get(name).is_some())
+    };
 
     // One package manager per repo: lockfile first, then the packageManager field, npm as the fallback.
-    if files.contains_key("pnpm-lock.yaml") || package_json.contains("\"packageManager\": \"pnpm") {
+    if files.contains_key("pnpm-lock.yaml") || package_manager == "pnpm" {
         result.push(PNPM);
-    } else if files.contains_key("yarn.lock") || package_json.contains("\"packageManager\": \"yarn") {
+    } else if files.contains_key("yarn.lock") || package_manager == "yarn" {
         result.push(YARN);
-    } else if files.contains_key("bun.lock")
-        || files.contains_key("bun.lockb")
-        || package_json.contains("\"packageManager\": \"bun")
-    {
+    } else if files.contains_key("bun.lock") || files.contains_key("bun.lockb") || package_manager == "bun" {
         result.push(BUN);
     } else if files.contains_key("package-lock.json")
         || files.contains_key("npm-shrinkwrap.json")
@@ -177,13 +132,13 @@ pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefi
     }
 
     // Tooling stacks on top of the package manager, so these are checked independently.
-    if files.contains_key("turbo.json") || package_json.contains("\"turbo\"") {
+    if files.contains_key("turbo.json") || has_dependency("turbo") {
         result.push(TURBO);
     }
     if ["next.config.js", "next.config.mjs", "next.config.ts"]
         .iter()
         .any(|file| files.contains_key(*file))
-        || package_json.contains("\"next\"")
+        || has_dependency("next")
     {
         result.push(NEXT);
     }
