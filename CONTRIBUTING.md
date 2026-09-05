@@ -10,7 +10,7 @@ Before opening a change:
 
 Rules:
 
-- Do not invoke Git outside `src/git`.
+- Keep Git subprocess construction and parsing inside `src/git`.
 - Do not print from lifecycle modules.
 - Do not add a general `--force` flag.
 - Do not run repository-controlled code automatically.
@@ -20,3 +20,5 @@ Rules:
 - Every source file opens with a `//!` line saying what it is for; keep it true when the file changes.
 - Types live beside the code that produces them; `model.rs` holds only what is written to disk.
 - Avoid lifetimes on structs and closures that outlive their scope; pass plain values.
+
+For dependency changes, run `cargo audit --deny warnings` and review the lockfile diff. Keep CI action references pinned to full commit SHAs.
