@@ -8,11 +8,11 @@ Only worktrees beneath Acre's configured repository `workspaces/` and `slots/` r
 
 ## No branch deletion
 
-`acre done` detaches a branch from a directory but never deletes the branch ref. Commits remain reachable through the branch exactly as before.
+`acre done` detaches a branch from a directory but never deletes the branch ref. Commits remain reachable through the branch exactly as before. Newly created detached commits block return until the user attaches them to a branch; recovered detached workspaces are also retained.
 
 ## No automatic repository execution
 
-Acre never runs package installation, build commands, shell hooks, editor commands, or code from `.acre.json`. Configuration is data-only.
+Workspace preparation never runs package installation, build commands, checkout hooks, or code from `.acre.json`. Internal Git commands disable hooks and filesystem-monitor commands. Git still uses locally configured filters, including Git LFS; the local Git configuration must be trusted. Explicit commands such as `acre <target> -- <command>` and `acre config edit` run only when requested.
 
 ## Return assessment
 
@@ -22,7 +22,7 @@ Tracked and untracked status comes from Git porcelain v2. Ignored state is liste
 
 ## Seed file preservation
 
-Trusted seed paths are copied after the target is bound. Acre snapshots their content recursively. Any modification blocks return. Idle slots are scrubbed of all seed paths, preventing secret carry-over into untrusted targets.
+Trusted seed paths are copied after the target is bound. Acre snapshots their content recursively. Any modification blocks return. Idle slots are scrubbed of all seed paths, preventing secret carry-over into untrusted targets. Copies are staged before publication; existing seed paths, including dangling symlinks, are preserved. Cache and seed operations do not follow symlinked parent directories.
 
 ## Pull requests
 
@@ -30,7 +30,7 @@ Cross-repository PRs are untrusted. No seed file is copied. Approved cache roots
 
 ## Locks
 
-Repository locks use an exclusive directory and owner token. Only the token owner can release a lock. A live PID is never evicted based only on elapsed time.
+Repository state and the shared repository index use OS-backed exclusive file locks. The OS releases locks when a process exits, including crashes. Lock files remain on disk so concurrent processes always lock the same file. Do not run older versions using directory locks concurrently with this version.
 
 ## Recovery bias
 
@@ -41,3 +41,7 @@ When metadata is uncertain:
 - missing Git registrations become broken records;
 - repair reports state rather than inventing branch identity;
 - data retention wins over pool capacity.
+
+Pool reuse, eviction, and garbage collection require an unlocked, detached, clean slot with known cache metadata, an unchanged recorded commit, no unknown ignored data, and no detected processes using the slot. Workspaces stay at their installation paths; opening an idle slot by path takes it out of the pool.
+
+Activation removes a slot from the persisted pool before changing files. If activation or its final state write fails, recovery retains the directory without trusting the old cache fingerprint. Legacy idle slots without a recorded commit remain unverified; explicitly reopen them, attach a branch if detached, and return them to establish a safe baseline.

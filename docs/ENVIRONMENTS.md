@@ -8,7 +8,7 @@ Git can switch tracked files to any commit. Acre decides whether ignored depende
 
 A generation fingerprint contains:
 
-- hashes of detected lockfiles and toolchain declarations at the target commit;
+- hashes of recognized manifests, lockfiles, and toolchain declarations at the target commit, including nested workspace packages;
 - the detected ecosystem set;
 - resolved cache and required roots;
 - operating system, architecture, OS major version, and Node major version.
@@ -40,15 +40,16 @@ For Node projects, `node_modules` is normally required. Rust’s `target` direct
 
 Built-ins can be extended or excluded in user config or `.acre.json`. Paths are data only and must remain repository-relative.
 
-A cache root applies at any depth, so a monorepo package's `packages/app/node_modules` is cloned, cleared, and excluded from the ignored-data check exactly like the top-level `node_modules`. Only Git-ignored directories qualify below the top level.
+A cache root applies at any depth, so a monorepo package's `packages/app/node_modules` is cloned, cleared, and excluded from the ignored-data check exactly like the top-level `node_modules`. Only Git-ignored directories qualify, including at the top level. Tracked paths and symlinked cache roots are not copied or cleared.
 
 ## Copy strategy
 
 Acre prefers whole-slot reuse. When a second compatible workspace needs the same environment while the first remains active, Acre attempts:
 
-1. native directory block clone on macOS or Linux;
-2. per-file `COPYFILE_FICLONE_FORCE`;
-3. a normal recursive copy.
+1. a filesystem clone using `cp -cR` on macOS or `cp -a --reflink=always` on Linux;
+2. a normal recursive copy when cloning is unavailable.
+
+Copies are staged in a temporary directory and published only after completion. Before copying, Acre checks the source checkout's current commit and refuses sources with staged, unstaged, or untracked fingerprint files. Ordinary source-code edits do not prevent cache sharing.
 
 The reported mode is honest. Acre does not label a full copy as a reflink.
 
@@ -58,7 +59,7 @@ Seed files are local configuration, not caches. Defaults are `.env` and `.env.lo
 
 They are:
 
-- copied only when the source path is Git-ignored and the target is trusted;
+- copied only when both source and destination paths are Git-ignored, the destination is absent, and the target is trusted;
 - hashed after activation;
 - blocked from return if modified;
 - always removed from idle pool slots;
@@ -76,4 +77,12 @@ Acre never runs repository code automatically. When a generation is cold:
 3. once the workspace is clean and safely returned, Acre retains the prepared roots;
 4. future matching branches reuse them.
 
-This means the cold cost is paid once per generation, not once per branch.
+The cold cost is normally paid once per generation per slot, while matching branches reuse the prepared slot.
+
+## Portability
+
+Acre keeps each workspace at a fixed directory through activation, return, and reuse. This preserves installation paths in Python environments and other caches. Directories identify slots; branch names remain visible in Acre but no longer determine the directory name.
+
+Python virtual environments containing `pyvenv.cfg` are reused only in place. Acre skips them when copying caches from another checkout, because their scripts and installed packages may embed absolute paths. Create the environment using the project's normal install command in each concurrent workspace; later matching branches reuse it at that same path. Acre does not run installers or rewrite environment contents automatically. See [Python's venv portability guidance](https://docs.python.org/3/library/venv.html#how-venvs-work).
+
+Existing workspace paths are preserved on upgrade. Environments already copied or moved by an earlier Acre version may need to be recreated once. Other cache roots are copied as configured; applications that embed absolute paths in those caches remain responsible for their portability. A `ready` snapshot verifies required-root presence, not the health of every installed package.

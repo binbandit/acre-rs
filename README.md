@@ -84,7 +84,7 @@ See [the work trial guide](docs/WORK_TRIAL.md) before using Acre against importa
 
 ## What Acre owns
 
-Acre keeps a small pool of detached reusable Git worktrees per repository. It fingerprints dependency generations from lockfiles and toolchain declarations, selects a compatible warm slot, moves the slot to a stable branch-derived path, binds the requested target, reuses approved cache roots, and copies trusted local seed files only for trusted targets.
+Acre keeps a small pool of detached reusable Git worktrees per repository. It fingerprints dependency generations from lockfiles and toolchain declarations, selects a compatible warm slot at its fixed directory, binds the requested target, reuses approved cache roots, and copies trusted local seed files only for trusted targets.
 
 When `acre done` is safe, Acre preserves the branch and commits, detaches the worktree, removes trusted seed copies, and returns the prepared environment to the pool.
 

@@ -37,7 +37,7 @@ src/
   workspace/             resolve, pool, activate, assess, release, lease, maintain, process
   environment/           definitions, fingerprint, inspect, roots, clone, seed
   git/                   runner, discovery, porcelain parsers, mutations
-  state/                 storage, paths, config, lock, repository, index, sessions, operations
+  state/                 storage, paths, config, lock, repository, index, shell, operations
   provider/              remote URL parsing and GitHub pull requests
   shell/                 directive protocol, generated integrations, navigation
   ui/                    markup, output, prompts, picker, error rendering
@@ -56,7 +56,7 @@ open/create
   → reconcile state against Git
   → fingerprint target environment
   → choose matching idle slot or create one
-  → move slot to stable active path
+  → persist its removal from the pool before changing files
   → bind branch or detached PR commit
   → reuse or seed compatible caches
   → copy trusted seed files when allowed
@@ -74,7 +74,7 @@ done/release
   → retain on any uncertainty
   → detach clean workspace
   → scrub copied seed files
-  → move workspace to its idle slot
+  → mark the workspace idle without moving its directory
   → save state atomically
 ```
 
@@ -84,10 +84,16 @@ Git is authoritative for repository discovery, worktree registrations, refs, sta
 
 ## State
 
-Acre state lives outside repositories under `$ACRE_HOME`, or the configured root. Writes use a temporary file in the same directory, `sync_all`, atomic rename, and parent-directory sync where supported.
+Acre state lives outside repositories under the configured root (default `~/.acre`). `ACRE_CONFIG` selects the configuration file. Writes use a temporary file in the same directory, `sync_all`, atomic rename, and parent-directory sync where supported.
 
 Persisted state is reconstructable from Git worktree registrations and Acre-owned path boundaries. Recovered ownership is treated conservatively.
 
 ## No daemon
 
 Acre is correct command-by-command. Pool replenishment may use a short-lived detached Acre process, but correctness never depends on a permanently running service.
+
+Repository identity comes from the canonical Git common directory, so independent clones do not share state. Existing remote-keyed state keeps its paths when it belongs to that common directory. Repository and index updates use OS-backed file locks via `fs4`; temporary files use `tempfile`.
+
+Workspace directories identify reusable slots, not branches. New slots live under `workspaces/<slot-id>`; existing managed directories keep their locations. Branch and PR names are display labels. Missing state or an interrupted activation recovers orphaned worktrees as retained workspaces, since a detached checkout alone does not prove it safe to recycle. Each reusable slot records its commit so later detached commits cannot be lost through reuse or garbage collection.
+
+Captured commands run in Unix process groups or Windows job objects using `process-wrap`. Input, output, and process exit share one timeout. Cancellation kills the group and reaps the immediate child; interactive passthrough commands retain normal terminal behavior.
