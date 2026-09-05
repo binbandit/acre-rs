@@ -1,121 +1,51 @@
-//! End-to-end coverage for state recovery: repair counts, finishing recovered workspaces,
-//! and nested cache roots. Each test drives the real binary against a throwaway repository.
+//! Workspace lifecycle and shell directive round trips against the real binary.
+
+mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use acre::git::runner::run_git;
 use assert_cmd::prelude::*;
-use serde_json::Value;
-use tempfile::TempDir;
+use common::{Fixture, branch_exists};
 
-struct Fixture {
-    temp: TempDir,
-    root: PathBuf,
-    repo: PathBuf,
-    config: PathBuf,
-}
-
-impl Fixture {
-    fn new() -> Self {
-        let temp = TempDir::new().expect("temp dir");
-        let root = temp.path().join("acre");
-        let repo = temp.path().join("repo");
-        let config = temp.path().join("config.json");
-        fs::create_dir_all(&repo).expect("repo dir");
-        let settings = serde_json::json!({
-            "root": root,
-            // No background replenisher: it would race the test's own view of the pool.
-            "pool": { "minSlots": 1, "maxSlots": 2, "replenish": false },
-        });
-        fs::write(&config, settings.to_string()).expect("config");
-
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "acre@example.invalid"]);
-        git(&repo, &["config", "user.name", "Acre Tests"]);
-        fs::write(repo.join(".gitignore"), "node_modules\n").expect("gitignore");
-        fs::write(repo.join("package.json"), "{\"name\":\"fixture\"}\n").expect("package.json");
-        git(&repo, &["add", "-A"]);
-        git(&repo, &["commit", "-q", "-m", "init"]);
-        Self {
-            temp,
-            root,
-            repo,
-            config,
-        }
-    }
-
-    fn acre(&self, args: &[&str]) -> Command {
-        let mut command = Command::cargo_bin("acre").expect("acre binary");
-        command
-            .current_dir(&self.repo)
-            .env("ACRE_CONFIG", &self.config)
-            // Scrub the caller's shell integration so tests behave like a plain terminal.
-            .env_remove("ACRE_SHELL_SESSION_ID")
-            .env_remove("ACRE_DIRECTIVE_FILE")
-            .env_remove("ACRE_SHELL_PID")
-            .args(args);
-        command
-    }
-
-    fn json(&self, args: &[&str]) -> Value {
-        let output = self.acre(args).output().expect("run acre");
-        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-            panic!(
-                "expected JSON from acre {args:?}: {error}\nstdout: {}\nstderr: {}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-        })
-    }
-
-    /// Runs with the shell integration's environment, as the wrapper function would, and returns the
-    /// directive file Acre writes its `cd` or resume instruction into.
-    fn acre_in_shell(&self, args: &[&str], session: &str, cwd: &Path) -> (Command, PathBuf) {
-        let directive = self.temp.path().join(format!("directive-{session}"));
-        let mut command = self.acre(args);
-        command
-            .current_dir(cwd)
-            .env("ACRE_SHELL_SESSION_ID", session)
-            .env("ACRE_DIRECTIVE_FILE", &directive)
-            .env("ACRE_SHELL_PID", std::process::id().to_string());
-        (command, directive)
-    }
-
-    fn open_workspace(&self, branch: &str) -> PathBuf {
-        let created = self.json(&["new", branch, "--stay", "--json"]);
-        assert_eq!(created["ok"], true, "{created}");
-        PathBuf::from(created["path"].as_str().expect("workspace path"))
-    }
-
-    // Simulates lost metadata: the worktrees survive, the state file does not.
-    fn forget_state(&self) {
-        let repositories = self.root.join("repositories");
-        for entry in fs::read_dir(&repositories).expect("repositories dir").flatten() {
-            let state = entry.path().join("state.json");
-            if state.exists() {
-                fs::remove_file(&state).expect("remove state");
-            }
-        }
-    }
-}
-
-fn git(cwd: &Path, args: &[&str]) {
-    run_git(cwd, args).unwrap_or_else(|error| panic!("git {args:?} failed: {error}"));
-}
-
-fn branch_exists(repo: &Path, branch: &str) -> bool {
-    run_git(
-        repo,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ],
+#[test]
+fn python_environments_are_reused_at_their_installation_path() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.repo.join("package.json")).unwrap();
+    fs::write(
+        fixture.repo.join("pyproject.toml"),
+        "[project]\nname = 'fixture'\n",
     )
-    .is_ok()
+    .unwrap();
+    fs::write(fixture.repo.join(".gitignore"), ".venv\n.pytest_cache\n").unwrap();
+    common::git(&fixture.repo, &["add", "-A"]);
+    common::git(&fixture.repo, &["commit", "-qm", "python fixture"]);
+    fs::create_dir(fixture.repo.join(".venv")).unwrap();
+    fs::write(fixture.repo.join(".venv/pyvenv.cfg"), "home = /python\n").unwrap();
+
+    let first = fixture.open_workspace("first");
+    assert!(
+        !first.join(".venv").exists(),
+        "an external venv cannot be relocated"
+    );
+    fs::create_dir(first.join(".venv")).unwrap();
+    fs::write(first.join(".venv/pyvenv.cfg"), "home = /python\n").unwrap();
+    fs::write(first.join(".venv/installed-at"), first.to_str().unwrap()).unwrap();
+
+    let done = fixture.json(&["done", "first", "--json"]);
+    assert_eq!(done["pooled"], true, "{done}");
+    assert!(first.join(".venv/installed-at").exists());
+    let second = fixture.json(&["new", "second", "--stay", "--json"]);
+    assert_eq!(second["path"], first.to_str().unwrap());
+    assert_eq!(second["environment"]["state"], "ready", "{second}");
+
+    let concurrent = fixture.open_workspace("concurrent");
+    assert_ne!(concurrent, first);
+    assert!(!concurrent.join(".venv").exists());
+    assert_eq!(
+        fs::read_to_string(first.join(".venv/installed-at")).unwrap(),
+        first.to_str().unwrap()
+    );
 }
 
 #[test]
@@ -127,8 +57,8 @@ fn repair_counts_only_records_it_actually_recovered_or_dropped() {
 
     fixture.forget_state();
     let report = fixture.json(&["system", "repair", "--json"]);
-    assert_eq!(report["report"]["addedSlots"], 1, "{report}");
-    assert_eq!(report["report"]["addedWorkspaces"], 1, "{report}");
+    assert_eq!(report["report"]["addedSlots"], 0, "{report}");
+    assert_eq!(report["report"]["addedWorkspaces"], 2, "{report}");
     assert_eq!(report["report"]["removedBrokenRecords"], 0, "{report}");
 
     let report = fixture.json(&["system", "repair", "--json"]);
@@ -235,13 +165,23 @@ fn done_inside_the_workspace_finishes_after_the_shell_moves_out() {
     assert!(destination.is_dir() && !token.is_empty(), "{fields:?}");
     assert!(workspace.exists(), "nothing moves until the shell has left");
 
+    let (mut wrong_session, _) = fixture.acre_in_shell(&["__resume", &token], "another-shell", &destination);
+    wrong_session.assert().failure();
+    assert!(workspace.exists());
+
+    let (mut still_inside, _) = fixture.acre_in_shell(&["__resume", &token], "shell-b", &workspace);
+    still_inside.assert().failure();
+    assert!(workspace.exists());
+
     let (mut resume, _) = fixture.acre_in_shell(&["__resume", &token], "shell-b", &destination);
     resume.assert().success();
     assert!(
-        !workspace.exists(),
-        "the workspace returns to the pool once the shell is out"
+        workspace.exists(),
+        "the returned workspace stays at its installation path"
     );
     assert!(branch_exists(&fixture.repo, "feature/inside"));
+    let inspected = fixture.json(&["system", "inspect", "--json"]);
+    assert_eq!(inspected["state"]["slots"][0]["status"], "idle");
 }
 
 #[test]
@@ -270,7 +210,10 @@ fn machine_api_acquires_and_releases_a_lease() {
     let released = fixture.json(&["--json", "release", "--lease-id", &lease_id]);
     assert_eq!(released["ok"], true, "{released}");
     assert_eq!(released["retained"], false, "{released}");
-    assert!(!path.exists(), "the last lease out returns the workspace");
+    assert!(path.exists(), "the returned workspace stays in place");
+    let inspected = fixture.json(&["system", "inspect", "--json"]);
+    assert_eq!(inspected["state"]["slots"][0]["status"], "idle");
+    assert_eq!(inspected["state"]["workspaces"], serde_json::json!([]));
 }
 
 #[test]
@@ -290,4 +233,27 @@ fn returned_caches_warm_the_next_branch() {
         path.join("node_modules/dep/index.js").exists(),
         "the pooled caches came along"
     );
+}
+
+#[test]
+fn seed_files_are_copied_scrubbed_and_retained_when_edited() {
+    let fixture = Fixture::new();
+    fs::write(fixture.repo.join(".gitignore"), "node_modules\n.env\n").unwrap();
+    common::git(&fixture.repo, &["commit", "-am", "ignore local secrets"]);
+    fs::write(fixture.repo.join(".env"), "local secret").unwrap();
+    let first = fixture.open_workspace("first");
+    assert_eq!(fs::read_to_string(first.join(".env")).unwrap(), "local secret");
+    assert_eq!(fixture.json(&["done", "first", "--json"])["pooled"], true);
+    let inspected = fixture.json(&["system", "inspect", "--json"]);
+    let slot = PathBuf::from(inspected["state"]["slots"][0]["path"].as_str().unwrap());
+    assert!(!slot.join(".env").exists());
+    let second = fixture.open_workspace("second");
+    fs::write(second.join(".env"), "edited secret").unwrap();
+    let done = fixture.json(&["done", "second", "--json"]);
+    assert_eq!(done["retained"], true, "{done}");
+    assert_eq!(
+        done["assessment"]["changedSeedFiles"],
+        serde_json::json!([".env"])
+    );
+    assert_eq!(fs::read_to_string(second.join(".env")).unwrap(), "edited secret");
 }
