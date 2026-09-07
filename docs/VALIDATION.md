@@ -23,6 +23,46 @@ cargo build --release --locked
 - Process detection is platform specific: `lsof` on macOS, `/proc` on Linux, nothing on Windows.
 - The generated shell functions themselves run inside a real interactive shell; the tests exercise the directive protocol beneath them.
 
+## Performance playground
+
+Build a release binary, then run:
+
+```sh
+python3 scripts/performance-playground.py --binary target/release/acre
+```
+
+The script creates a persistent temporary playground with 1,000 branches spanning 20 commits,
+24 registered worktrees, 2,000 tracked files, 5,000 dependency-cache files, and eight warm slots.
+It measures cold and warm `acre new` calls and `acre -` shell directive round trips. On Unix it
+also holds the repository lock for two seconds to reproduce navigation during background
+workspace preparation. Each scenario saves individual timings and Git process traces, with
+medians in `results.json`. Pool replenishment is disabled during ordinary measurements so
+background copying cannot contaminate the comparison. No network or user Acre state is used.
+
+Compare two saved binaries with identical fixture sizes:
+
+```sh
+python3 scripts/performance-playground.py --compare /tmp/acre-before --binary target/release/acre
+```
+
+Use `--branches`, `--worktrees`, `--files`, `--cache-files`, `--slots`, and `--runs` to vary scale.
+`--output` selects a new directory; existing directories are refused. The playground keeps
+the exact binaries and repositories for further investigation. On Unix each fixture has an
+`acre` launcher that selects its isolated configuration. From the fixture's `repo` directory,
+enable navigation in a disposable Zsh session with the following (use `bash` instead of `zsh`
+for Bash):
+
+```sh
+export ACRE_EXECUTABLE="$(cd .. && pwd)/acre"
+eval "$("$ACRE_EXECUTABLE" shell init zsh)"
+```
+
+Remove the printed playground directory when finished.
+
+The integration tests also verify that navigation completes while a repository lock remains
+held and that pool selection skips unsafe preferred slots without scanning unused candidates.
+These check the cause of the regression without imposing tight machine-dependent timings.
+
 ## Open limitations
 
 - Process groups are resource cleanup, not a sandbox. Unix descendants that deliberately leave the group can survive cancellation; a captured process without a timeout can wait indefinitely for inherited pipes.
