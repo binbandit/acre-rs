@@ -2,7 +2,7 @@
 
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::fetch_ref;
-use crate::git::refs::{GitRef, GitRefKind, list_refs, resolve_oid, validate_branch_name};
+use crate::git::refs::{GitRef, GitRefKind, list_refs, ref_exists, resolve_oid, validate_branch_name};
 use crate::git::repository::Repository;
 use crate::git::worktrees::GitWorktree;
 use crate::model::WorkspaceStatus;
@@ -265,7 +265,7 @@ pub fn resolve_new_target(
         .worktrees
         .iter()
         .any(|worktree| worktree.branch.as_deref() == Some(branch))
-        || resolve_oid(&repository.top_level, &format!("refs/heads/{branch}"))?.is_some()
+        || ref_exists(&repository.top_level, &format!("refs/heads/{branch}"))?
     {
         return Err(AcreError::new(
             "ACRE_BRANCH_EXISTS",
@@ -288,11 +288,10 @@ pub fn resolve_new_target(
         // Prefer origin/main over local main: the local one may be stale.
         match &repository.remote {
             Some(remote)
-                if resolve_oid(
+                if ref_exists(
                     &repository.top_level,
                     &format!("refs/remotes/{remote}/{default_branch}"),
-                )?
-                .is_some() =>
+                )? =>
             {
                 format!("{remote}/{default_branch}")
             }

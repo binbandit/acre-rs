@@ -121,6 +121,19 @@ pub fn resolve_oid(cwd: &Path, reference: &str) -> Result<Option<String>> {
     Ok((result.status == 0).then(|| decode_stdout(&result)))
 }
 
+/// Checks one fully qualified ref without enumerating refs or applying revision-name shorthand.
+pub fn ref_exists(cwd: &Path, reference: &str) -> Result<bool> {
+    let result = run_git_with(
+        cwd,
+        &["show-ref", "--verify", "--quiet", "--", reference],
+        RunOptions {
+            accepted_statuses: &[0, 1],
+            ..RunOptions::default()
+        },
+    )?;
+    Ok(result.status == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

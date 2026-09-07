@@ -194,6 +194,85 @@ fn previous_location_does_not_wait_for_workspace_preparation() {
 }
 
 #[test]
+fn previous_location_moves_leases_between_repositories() {
+    let fixture = Fixture::new();
+    let other = Fixture::new();
+    let (mut first, directive) = fixture.acre_in_shell(&["new", "first"], "cross-repo", &fixture.repo);
+    first.assert().success();
+    let first = PathBuf::from(&directive_fields(&directive)[2]);
+    // Keep one Acre configuration and shell history while visiting another repository.
+    let (mut second, directive) = fixture.acre_in_shell(&["new", "second"], "cross-repo", &other.repo);
+    second.assert().success();
+    let second = PathBuf::from(&directive_fields(&directive)[2]);
+    for (from, to, source_repo, destination_repo) in [
+        (&second, &first, &other.repo, &fixture.repo),
+        (&first, &second, &fixture.repo, &other.repo),
+    ] {
+        let (mut navigate, directive) = fixture.acre_in_shell(&["-"], "cross-repo", from);
+        navigate.assert().success();
+        assert_eq!(PathBuf::from(&directive_fields(&directive)[2]), *to);
+        for (repo, expected) in [(source_repo, 0), (destination_repo, 1)] {
+            let output = fixture
+                .acre(&["system", "inspect", "--json"])
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            let inspected: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(inspected["state"]["leases"].as_array().unwrap().len(), expected);
+        }
+    }
+}
+
+#[test]
+fn new_resolves_exact_refs_and_preserves_base_selection() {
+    use acre::git::refs::resolve_oid;
+    let fixture = Fixture::new();
+    let original = resolve_oid(&fixture.repo, "HEAD").unwrap().unwrap();
+    common::git(
+        &fixture.repo,
+        &["remote", "add", "origin", fixture.repo.to_str().unwrap()],
+    );
+    common::git(
+        &fixture.repo,
+        &["update-ref", "refs/remotes/origin/main", &original],
+    );
+    fs::write(fixture.repo.join("new.txt"), "new commit").unwrap();
+    common::git(&fixture.repo, &["add", "."]);
+    common::git(&fixture.repo, &["commit", "-qm", "advance local main"]);
+    let latest = resolve_oid(&fixture.repo, "HEAD").unwrap().unwrap();
+    for (branch, flags, expected) in [
+        ("remote-base", vec![], &original),
+        ("explicit-base", vec!["--from", "main"], &latest),
+        ("current-base", vec!["--from", "."], &latest),
+        ("fresh-base", vec!["--fresh"], &latest),
+    ] {
+        let mut args = vec!["new", branch, "--stay", "--json"];
+        args.extend(flags);
+        let result = fixture.json(&args);
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(
+            resolve_oid(&fixture.repo, &format!("refs/heads/{branch}"))
+                .unwrap()
+                .as_ref(),
+            Some(expected)
+        );
+    }
+    common::git(&fixture.repo, &["update-ref", "-d", "refs/remotes/origin/main"]);
+    // A similarly named tag must not impersonate a local or remote branch.
+    common::git(&fixture.repo, &["tag", "refs/heads/tag-shadow"]);
+    common::git(&fixture.repo, &["tag", "refs/remotes/origin/main"]);
+    let result = fixture.json(&["new", "tag-shadow", "--stay", "--json"]);
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["base_ref"], "main");
+    common::git(&fixture.repo, &["branch", "existing"]);
+    fixture
+        .acre(&["new", "existing", "--stay", "--json"])
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("ACRE_BRANCH_EXISTS"));
+}
+
+#[test]
 fn new_checks_preferred_slots_until_one_is_safe() {
     use acre::git::repository::discover_repository;
     use acre::state::repository::{load_repository_state, save_repository_state};
@@ -238,10 +317,19 @@ fn new_checks_preferred_slots_until_one_is_safe() {
         fs::read_to_string(newest.join("package.json")).unwrap(),
         "user changes"
     );
-    let checked: Vec<PathBuf> = fs::read_to_string(trace)
+    let events: Vec<serde_json::Value> = fs::read_to_string(trace)
         .unwrap()
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect();
+    assert!(
+        !events.iter().any(|event| event["argv"]
+            .as_array()
+            .is_some_and(|args| args.iter().any(|arg| arg == "for-each-ref"))),
+        "new must not enumerate every ref"
+    );
+    let checked: Vec<PathBuf> = events
+        .into_iter()
         .filter_map(|event| event["worktree"].as_str().map(PathBuf::from))
         .map(|path| fs::canonicalize(path).unwrap())
         .collect();
