@@ -2,10 +2,12 @@
 
 use std::io::{IsTerminal, Write};
 
-use crossterm::cursor::MoveToColumn;
+use crossterm::cursor::{Hide, MoveToColumn, Show};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, read};
 use crossterm::execute;
-use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::error::{AcreError, Result, exit};
 use crate::ui::output::Renderer;
@@ -32,18 +34,20 @@ pub fn pick<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]) -
     }
     enable_raw_mode()
         .map_err(|error| AcreError::new("ACRE_TERMINAL", error.to_string(), exit::ENVIRONMENT))?;
-    let result = picker_loop(renderer, title, rows);
+    let mut stdout = std::io::stdout();
+    let result = execute!(stdout, Hide)
+        .map_err(|error| AcreError::io("could not hide picker cursor", error))
+        .and_then(|()| picker_loop(renderer, title, rows));
+    // Frames leave the cursor at their origin, so cleanup also works after a resize.
+    let _ = execute!(stdout, MoveToColumn(0), Clear(ClearType::FromCursorDown), Show);
     // Raw mode must end even when the loop failed, or the terminal is left unusable.
     let _ = disable_raw_mode();
-    let mut stdout = std::io::stdout();
-    let _ = execute!(stdout, MoveToColumn(0), Clear(ClearType::FromCursorDown));
     result
 }
 
 fn picker_loop<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]) -> Result<PickerResult<T>> {
     let mut filter = String::new();
     let mut selected = 0usize;
-    let mut lines_drawn = 0usize;
     let mut stdout = std::io::stdout().lock();
     loop {
         draw(
@@ -53,7 +57,7 @@ fn picker_loop<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]
             rows,
             &filter,
             selected,
-            &mut lines_drawn,
+            size().map_err(|error| AcreError::io("could not read terminal size", error))?,
         )?;
         let event =
             read().map_err(|error| AcreError::new("ACRE_TERMINAL", error.to_string(), exit::ENVIRONMENT))?;
@@ -113,66 +117,105 @@ fn draw<T>(
     rows: &[PickerRow<T>],
     filter: &str,
     mut selected: usize,
-    lines_drawn: &mut usize,
+    (columns, height): (u16, u16),
 ) -> Result<()> {
     let visible = visible_rows(rows, filter);
     if selected >= visible.len() {
         selected = visible.len().saturating_sub(1);
     }
-    write!(stdout, "\r").map_err(|error| AcreError::io("could not draw picker", error))?;
-    if *lines_drawn > 0 {
-        // Move up over our previous frame and clear it, so the picker redraws in place.
-        write!(stdout, "\x1b[{}A\x1b[0J", *lines_drawn)
-            .map_err(|error| AcreError::io("could not draw picker", error))?;
+    // Leave the last column unused to avoid the terminal's pending autowrap state.
+    let width = usize::from(columns.saturating_sub(1));
+    let height = usize::from(height.max(1));
+    let spacious = height >= 7;
+    let show_title = height >= 3;
+    let show_footer = height >= 2;
+    let chrome = usize::from(show_title) + usize::from(show_footer) + 2 * usize::from(spacious);
+    let capacity = (height - chrome).min(13);
+    let mut output = Vec::new();
+    if show_title {
+        output.push(format_line(renderer, &[("bold", title)], width));
     }
-    let mut output = vec![format!("<bold>{}</bold>", renderer.value(title)), String::new()];
-    // Keep the selection roughly centred in the 13-row window.
-    let offset = selected.saturating_sub(6);
-    for (index, row) in visible.iter().skip(offset).take(13).enumerate() {
-        let marker = if offset + index == selected {
-            "<green>›</green>"
-        } else {
-            " "
-        };
-        let detail = row
-            .detail
-            .as_ref()
-            .map(|detail| format!("  <dim>{}</dim>", renderer.value(detail)))
-            .unwrap_or_default();
-        output.push(format!(
-            "{marker} <blue>{}</blue>{detail}",
-            renderer.value(&row.label)
-        ));
+    if spacious {
+        output.push(String::new());
+    }
+    // Keep the selection centred where possible and fill the window at either end.
+    let offset = selected
+        .saturating_sub(capacity / 2)
+        .min(visible.len().saturating_sub(capacity));
+    for (index, row) in visible.iter().skip(offset).take(capacity).enumerate() {
+        let marker = if offset + index == selected { "› " } else { "  " };
+        let mut parts = vec![("green", marker), ("blue", row.label.as_str())];
+        if let Some(detail) = &row.detail {
+            parts.extend([("", "  "), ("dim", detail.as_str())]);
+        }
+        output.push(format_line(renderer, &parts, width));
     }
     if visible.is_empty() {
-        output.push("  <dim>No matches</dim>".to_owned());
+        output.push(format_line(renderer, &[("dim", "  No matches")], width));
     }
-    output.push(String::new());
-    output.push(format!(
-        "<dim>{} · ↑↓ select · Enter open · Esc leave</dim>",
-        renderer.value(if filter.is_empty() {
-            "Type to search"
+    if spacious {
+        output.push(String::new());
+    }
+    if show_footer {
+        let hint = if width >= 49 {
+            "Type to search · ↑↓ select · Enter open · Esc leave"
         } else {
-            filter
-        })
-    ));
-    write!(
-        stdout,
-        "{}\r\n",
-        output
-            .iter()
-            // Always a tty here (pick checked), so colour depends only on the user's flags.
-            .map(|line| renderer.format(line, true))
-            .collect::<Vec<_>>()
-            // Raw mode does not translate LF into CRLF; reset the column for every line.
-            .join("\r\n")
-    )
-    .map_err(|error| AcreError::io("could not draw picker", error))?;
-    stdout
-        .flush()
+            "↑↓ · Enter · Esc"
+        };
+        let footer = if filter.is_empty() {
+            hint.to_owned()
+        } else {
+            format!("{filter} · ↑↓ · Enter · Esc")
+        };
+        output.push(format_line(renderer, &[("dim", &footer)], width));
+    }
+    // Keep the cursor at the frame's origin between events. A terminal resize can
+    // reflow the old rows, so their previous count cannot locate the next frame.
+    write!(stdout, "\r\x1b[0J{}", output.join("\r\n"))
         .map_err(|error| AcreError::io("could not draw picker", error))?;
-    *lines_drawn = output.len();
-    Ok(())
+    if output.len() > 1 {
+        write!(stdout, "\x1b[{}A", output.len() - 1)
+            .map_err(|error| AcreError::io("could not draw picker", error))?;
+    }
+    write!(stdout, "\r")
+        .and_then(|()| stdout.flush())
+        .map_err(|error| AcreError::io("could not draw picker", error))
+}
+
+fn format_line(renderer: &Renderer, parts: &[(&str, &str)], width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let parts = parts
+        .iter()
+        .map(|(style, value)| (*style, renderer.value(value)))
+        .collect::<Vec<_>>();
+    let clipped = parts.iter().map(|(_, value)| value.width()).sum::<usize>() > width;
+    let mut remaining = width - usize::from(clipped);
+    let mut markup = String::new();
+    for (style, value) in parts {
+        let mut end = 0;
+        for grapheme in value.graphemes(true) {
+            let cells = grapheme.width();
+            if cells > remaining {
+                break;
+            }
+            remaining -= cells;
+            end += grapheme.len();
+        }
+        if style.is_empty() {
+            markup.push_str(&value[..end]);
+        } else {
+            markup.push_str(&format!("<{style}>{}</{style}>", &value[..end]));
+        }
+        if end < value.len() {
+            break;
+        }
+    }
+    if clipped {
+        markup.push('…');
+    }
+    renderer.format(&markup, true)
 }
 
 fn visible_rows<'a, T>(rows: &'a [PickerRow<T>], filter: &str) -> Vec<&'a PickerRow<T>> {
@@ -193,9 +236,8 @@ mod tests {
     use super::*;
     use crate::cli::{CommandContext, GlobalOptions, ShellBridge};
 
-    #[test]
-    fn raw_mode_frames_keep_rows_aligned_when_selecting_and_filtering() {
-        let renderer = Renderer::new(&CommandContext {
+    fn renderer() -> Renderer {
+        Renderer::new(&CommandContext {
             cwd: Default::default(),
             interactive: true,
             global: GlobalOptions {
@@ -211,67 +253,147 @@ mod tests {
                 session_id: None,
                 pid: None,
             },
-        });
-        let rows = ["main", "feature/alpha", "feature/beta"].map(|label| PickerRow {
-            label: label.to_owned(),
-            detail: Some("local branch".to_owned()),
-            searchable: label.to_owned(),
-            value: (),
-        });
-        let mut lines_drawn = 0;
+        })
+    }
+
+    fn rows(labels: &[&str]) -> Vec<PickerRow<()>> {
+        labels
+            .iter()
+            .map(|label| PickerRow {
+                label: (*label).to_owned(),
+                detail: Some("local branch".to_owned()),
+                searchable: (*label).to_owned(),
+                value: (),
+            })
+            .collect()
+    }
+
+    fn frame(
+        terminal: &mut vt100::Parser,
+        rows: &[PickerRow<()>],
+        filter: &str,
+        selected: usize,
+        size: (u16, u16),
+    ) {
+        let mut output = Vec::new();
+        draw(&mut output, &renderer(), "repo", rows, filter, selected, size).unwrap();
+        terminal.process(&output);
+    }
+
+    #[test]
+    fn raw_mode_frames_keep_rows_aligned_when_selecting_and_filtering() {
+        let rows = rows(&["main", "feature/alpha", "feature/beta"]);
+        let mut terminal = vt100::Parser::new(24, 80, 0);
+        terminal.process(b"Prior shell output\r\n$ acre\r\n");
         for (filter, selected, expected_rows) in [
             (
                 "",
                 0,
-                vec![
-                    "› main  local branch",
-                    "  feature/alpha  local branch",
-                    "  feature/beta  local branch",
-                ],
+                "› main  local branch\n  feature/alpha  local branch\n  feature/beta  local branch",
             ),
             (
                 "",
                 1,
-                vec![
-                    "  main  local branch",
-                    "› feature/alpha  local branch",
-                    "  feature/beta  local branch",
-                ],
+                "  main  local branch\n› feature/alpha  local branch\n  feature/beta  local branch",
             ),
-            ("beta", 0, vec!["› feature/beta  local branch"]),
-            ("missing", 0, vec!["  No matches"]),
+            ("beta", 0, "› feature/beta  local branch"),
+            ("missing", 0, "  No matches"),
+            (
+                "",
+                0,
+                "› main  local branch\n  feature/alpha  local branch\n  feature/beta  local branch",
+            ),
         ] {
-            let previous_lines = lines_drawn;
-            let mut output = Vec::new();
-            draw(
-                &mut output,
-                &renderer,
-                "repo",
-                &rows,
-                filter,
-                selected,
-                &mut lines_drawn,
-            )
-            .unwrap();
-            let output = String::from_utf8(output).unwrap();
-            let prefix = if previous_lines == 0 {
-                "\r".to_owned()
-            } else {
-                format!("\r\x1b[{previous_lines}A\x1b[0J")
-            };
-            let frame = output.strip_prefix(&prefix).expect("redraw from the left edge");
-            // Every newline, including the final one, must reset the column in raw mode.
-            assert!(!frame.replace("\r\n", "").contains('\n'));
-            let lines = frame
-                .strip_suffix("\r\n")
-                .unwrap()
-                .split("\r\n")
-                .collect::<Vec<_>>();
-            assert_eq!(&lines[..2], &["repo", ""]);
-            assert_eq!(&lines[2..lines.len() - 2], expected_rows);
-            assert_eq!(lines[lines.len() - 2], "");
-            assert!(lines.last().unwrap().ends_with("Esc leave"));
-            assert_eq!(lines_drawn, lines.len());
+            frame(&mut terminal, &rows, filter, selected, (80, 24));
+            let contents = terminal.screen().contents();
+            assert!(
+                contents.starts_with(&format!(
+                    "Prior shell output\n$ acre\nrepo\n\n{expected_rows}\n\n"
+                )),
+                "{contents}"
+            );
+            assert_eq!(terminal.screen().cursor_position(), (2, 0));
+            assert!(contents.ends_with(if filter.is_empty() { "Esc leave" } else { "Esc" }));
         }
+        terminal.process(b"\r\x1b[0J");
+        assert_eq!(terminal.screen().contents(), "Prior shell output\n$ acre");
+    }
+
+    #[test]
+    fn long_rows_and_small_terminals_do_not_wrap_or_hide_the_selection() {
+        let labels = (0..30)
+            .map(|index| format!("feature/{index:02}-{}", "日本語".repeat(30)))
+            .collect::<Vec<_>>();
+        let rows = rows(&labels.iter().map(String::as_str).collect::<Vec<_>>());
+        for (width, height) in [(80, 24), (40, 8), (20, 4), (10, 2), (10, 1)] {
+            let mut terminal = vt100::Parser::new(height, width, 0);
+            // Start at the bottom as a real shell often does.
+            terminal.process(format!("\x1b[{height};1H").as_bytes());
+            for selected in [0, 15, 29, 0] {
+                frame(&mut terminal, &rows, "", selected, (width, height));
+                let contents = terminal.screen().contents();
+                assert_eq!(contents.matches('›').count(), 1, "{width}x{height}: {contents}");
+                assert!(contents.contains('…'), "{contents}");
+                for row in 0..height {
+                    assert!(
+                        !terminal.screen().row_wrapped(row),
+                        "{width}x{height}: {contents}"
+                    );
+                }
+                assert_eq!(terminal.screen().cursor_position().1, 0);
+                if height >= 4 {
+                    assert!(
+                        contents.contains(&format!("› feature/{selected:02}-")),
+                        "{contents}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn resizing_redraws_from_the_origin_without_stale_rows() {
+        let rows = rows(&["main", "feature/alpha", "feature/beta"]);
+        let mut terminal = vt100::Parser::new(24, 80, 0);
+        for (width, height) in [(80, 24), (20, 4), (40, 8), (80, 24)] {
+            terminal.set_size(height, width);
+            frame(&mut terminal, &rows, "", 2, (width, height));
+            let contents = terminal.screen().contents();
+            assert_eq!(contents.matches("repo").count(), 1, "{contents}");
+            assert_eq!(contents.matches('›').count(), 1, "{contents}");
+            assert!(contents.contains("› feature/beta"), "{contents}");
+            assert_eq!(terminal.screen().cursor_position(), (0, 0));
+        }
+        frame(&mut terminal, &rows, &"z".repeat(200), 0, (80, 24));
+        let contents = terminal.screen().contents();
+        assert!(contents.contains("No matches"));
+        assert!(!contents.contains("feature/"));
+        for row in 0..24 {
+            assert!(!terminal.screen().row_wrapped(row));
+        }
+    }
+
+    #[test]
+    fn clipping_preserves_graphemes_and_escapes_terminal_controls() {
+        let renderer = renderer();
+        for (text, width, expected) in [
+            ("日本語", 5, "日本…"),
+            ("👩‍💻abc", 3, "👩‍💻…"),
+            ("éabc", 2, "é…"),
+            ("hello", 5, "hello"),
+            ("hello", 1, "…"),
+            ("hello", 0, ""),
+            ("<bold>\n", 20, "‹bold›\\x0a"),
+        ] {
+            assert_eq!(format_line(&renderer, &[("blue", text)], width), expected);
+        }
+        assert_eq!(
+            format_line(
+                &renderer,
+                &[("green", "› "), ("blue", "日本語"), ("dim", " detail")],
+                7
+            ),
+            "› 日本…"
+        );
     }
 }
