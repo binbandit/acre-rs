@@ -44,8 +44,17 @@ fn picker_loop<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]
     let mut filter = String::new();
     let mut selected = 0usize;
     let mut lines_drawn = 0usize;
+    let mut stdout = std::io::stdout().lock();
     loop {
-        draw(renderer, title, rows, &filter, selected, &mut lines_drawn)?;
+        draw(
+            &mut stdout,
+            renderer,
+            title,
+            rows,
+            &filter,
+            selected,
+            &mut lines_drawn,
+        )?;
         let event =
             read().map_err(|error| AcreError::new("ACRE_TERMINAL", error.to_string(), exit::ENVIRONMENT))?;
         let Event::Key(key) = event else { continue };
@@ -98,6 +107,7 @@ fn picker_loop<T: Clone>(renderer: &Renderer, title: &str, rows: &[PickerRow<T>]
 }
 
 fn draw<T>(
+    stdout: &mut impl Write,
     renderer: &Renderer,
     title: &str,
     rows: &[PickerRow<T>],
@@ -109,7 +119,7 @@ fn draw<T>(
     if selected >= visible.len() {
         selected = visible.len().saturating_sub(1);
     }
-    let mut stdout = std::io::stdout();
+    write!(stdout, "\r").map_err(|error| AcreError::io("could not draw picker", error))?;
     if *lines_drawn > 0 {
         // Move up over our previous frame and clear it, so the picker redraws in place.
         write!(stdout, "\x1b[{}A\x1b[0J", *lines_drawn)
@@ -146,15 +156,16 @@ fn draw<T>(
             filter
         })
     ));
-    writeln!(
+    write!(
         stdout,
-        "{}",
+        "{}\r\n",
         output
             .iter()
             // Always a tty here (pick checked), so colour depends only on the user's flags.
             .map(|line| renderer.format(line, true))
             .collect::<Vec<_>>()
-            .join("\n")
+            // Raw mode does not translate LF into CRLF; reset the column for every line.
+            .join("\r\n")
     )
     .map_err(|error| AcreError::io("could not draw picker", error))?;
     stdout
@@ -175,4 +186,92 @@ fn visible_rows<'a, T>(rows: &'a [PickerRow<T>], filter: &str) -> Vec<&'a Picker
             haystack.contains(&needle) || is_subsequence(&needle, &haystack)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{CommandContext, GlobalOptions, ShellBridge};
+
+    #[test]
+    fn raw_mode_frames_keep_rows_aligned_when_selecting_and_filtering() {
+        let renderer = Renderer::new(&CommandContext {
+            cwd: Default::default(),
+            interactive: true,
+            global: GlobalOptions {
+                directory: None,
+                json: false,
+                no_color: true,
+                plain: false,
+                verbose: false,
+            },
+            shell: ShellBridge {
+                active: false,
+                directive_file: None,
+                session_id: None,
+                pid: None,
+            },
+        });
+        let rows = ["main", "feature/alpha", "feature/beta"].map(|label| PickerRow {
+            label: label.to_owned(),
+            detail: Some("local branch".to_owned()),
+            searchable: label.to_owned(),
+            value: (),
+        });
+        let mut lines_drawn = 0;
+        for (filter, selected, expected_rows) in [
+            (
+                "",
+                0,
+                vec![
+                    "› main  local branch",
+                    "  feature/alpha  local branch",
+                    "  feature/beta  local branch",
+                ],
+            ),
+            (
+                "",
+                1,
+                vec![
+                    "  main  local branch",
+                    "› feature/alpha  local branch",
+                    "  feature/beta  local branch",
+                ],
+            ),
+            ("beta", 0, vec!["› feature/beta  local branch"]),
+            ("missing", 0, vec!["  No matches"]),
+        ] {
+            let previous_lines = lines_drawn;
+            let mut output = Vec::new();
+            draw(
+                &mut output,
+                &renderer,
+                "repo",
+                &rows,
+                filter,
+                selected,
+                &mut lines_drawn,
+            )
+            .unwrap();
+            let output = String::from_utf8(output).unwrap();
+            let prefix = if previous_lines == 0 {
+                "\r".to_owned()
+            } else {
+                format!("\r\x1b[{previous_lines}A\x1b[0J")
+            };
+            let frame = output.strip_prefix(&prefix).expect("redraw from the left edge");
+            // Every newline, including the final one, must reset the column in raw mode.
+            assert!(!frame.replace("\r\n", "").contains('\n'));
+            let lines = frame
+                .strip_suffix("\r\n")
+                .unwrap()
+                .split("\r\n")
+                .collect::<Vec<_>>();
+            assert_eq!(&lines[..2], &["repo", ""]);
+            assert_eq!(&lines[2..lines.len() - 2], expected_rows);
+            assert_eq!(lines[lines.len() - 2], "");
+            assert!(lines.last().unwrap().ends_with("Esc leave"));
+            assert_eq!(lines_drawn, lines.len());
+        }
+    }
 }
