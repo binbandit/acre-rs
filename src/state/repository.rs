@@ -138,6 +138,15 @@ pub struct LockedRepository {
 impl LockedRepository {
     pub fn open(config: &AcreConfig, repository: &Repository) -> Result<Self> {
         let lock = RepositoryLock::acquire(&repository_lock_path(config, repository))?;
+        Self::with_lock(config, repository, lock)
+    }
+
+    pub fn try_open(config: &AcreConfig, repository: &Repository) -> Result<Self> {
+        let lock = RepositoryLock::try_acquire(&repository_lock_path(config, repository))?;
+        Self::with_lock(config, repository, lock)
+    }
+
+    fn with_lock(config: &AcreConfig, repository: &Repository, lock: RepositoryLock) -> Result<Self> {
         // Rediscover under the lock: another process may have added or pruned worktrees.
         let repository = discover_repository(&repository.top_level)?;
         let state = load_repository_state(config, &repository)?;
@@ -169,13 +178,14 @@ fn recover_owned_worktrees(
         .map(|workspace| canonical_or_absolute(&workspace.path))
         .collect();
     let timestamp = now_iso();
+    let active = active_root(config, repository);
+    let slots = slots_root(config, repository);
 
     for worktree in &repository.worktrees {
         let path = canonical_or_absolute(&worktree.path);
         // An unrecorded worktree may hold detached commits or local data. Recover it as
         // retained, never infer permission to recycle it from its directory or branch state.
-        if (is_inside(&active_root(config, repository), &path)
-            || is_inside(&slots_root(config, repository), &path))
+        if (is_inside(&active, &path) || is_inside(&slots, &path))
             && !slot_paths.contains(&path)
             && !workspace_paths.contains(&path)
         {

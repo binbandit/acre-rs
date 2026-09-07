@@ -16,6 +16,15 @@ pub struct RepositoryLock {
 
 impl RepositoryLock {
     pub fn acquire(path: &Path) -> Result<Self> {
+        Self::acquire_with_timeout(path, Duration::from_secs(30))
+    }
+
+    /// Best-effort bookkeeping must not wait behind workspace preparation.
+    pub fn try_acquire(path: &Path) -> Result<Self> {
+        Self::acquire_with_timeout(path, Duration::ZERO)
+    }
+
+    fn acquire_with_timeout(path: &Path, timeout: Duration) -> Result<Self> {
         if let Some(parent) = path.parent() {
             ensure_directory(parent)?;
         }
@@ -34,7 +43,7 @@ impl RepositoryLock {
             match FileExt::try_lock(&file) {
                 // Keep the file on disk: unlinking it would let another process lock a different inode.
                 Ok(()) => return Ok(Self { _file: file }),
-                Err(TryLockError::WouldBlock) if started.elapsed() < Duration::from_secs(30) => {
+                Err(TryLockError::WouldBlock) if started.elapsed() < timeout => {
                     thread::sleep(Duration::from_millis(50));
                 }
                 Err(TryLockError::WouldBlock) => {

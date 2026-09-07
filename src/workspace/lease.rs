@@ -73,27 +73,33 @@ pub fn release_session(state: &mut RepositoryState, session_id: &str, workspace_
     });
 }
 
+/// Moves a shell's lease in one transaction, releasing it when the destination is unmanaged.
 pub fn lease_workspace_by_path(
     config: &AcreConfig,
     repository: &Repository,
     workspace_path: &Path,
     request: &LeaseRequest,
 ) -> Result<Option<WorkspaceLease>> {
-    let mut locked = LockedRepository::open(config, repository)?;
-    let Some(workspace_id) = locked
+    let mut locked = LockedRepository::try_open(config, repository)?;
+    let workspace_id = locked
         .state
         .workspace_at(
-            &crate::git::worktrees::find_current_worktree(&repository.worktrees, workspace_path)
+            &crate::git::worktrees::find_current_worktree(&locked.repository.worktrees, workspace_path)
                 .map(|worktree| worktree.path)
                 .unwrap_or_else(|| workspace_path.to_path_buf()),
         )
-        .map(|workspace| workspace.id.clone())
-    else {
-        return Ok(None);
-    };
-    let lease = acquire(&mut locked.state, &workspace_id, request);
-    locked.save(config)?;
-    Ok(Some(lease))
+        .map(|workspace| workspace.id.clone());
+    let before = locked.state.leases.len();
+    let lease = workspace_id.map(|workspace_id| acquire(&mut locked.state, &workspace_id, request));
+    if lease.is_none() {
+        if let Some(session_id) = &request.session_id {
+            release_session(&mut locked.state, session_id, None);
+        }
+    }
+    if lease.is_some() || locked.state.leases.len() != before {
+        locked.save(config)?;
+    }
+    Ok(lease)
 }
 
 pub fn release_shell_session_lease(
@@ -101,7 +107,7 @@ pub fn release_shell_session_lease(
     repository: &Repository,
     session_id: &str,
 ) -> Result<()> {
-    let mut locked = LockedRepository::open(config, repository)?;
+    let mut locked = LockedRepository::try_open(config, repository)?;
     let before = locked.state.leases.len();
     release_session(&mut locked.state, session_id, None);
     // Skip the write when nothing changed; `acre -` calls this on every hop.

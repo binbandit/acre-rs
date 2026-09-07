@@ -143,6 +143,114 @@ fn shell_integration_moves_the_shell_and_back_again() {
         fs::canonicalize(&fields[2]).expect("previous"),
         fs::canonicalize(&fixture.repo).expect("repo")
     );
+    let inspected = fixture.json(&["system", "inspect", "--json"]);
+    assert!(inspected["state"]["leases"].as_array().unwrap().is_empty());
+
+    let (mut forward, _) = fixture.acre_in_shell(&["-"], "shell-a", &fixture.repo);
+    forward.assert().success();
+    let inspected = fixture.json(&["system", "inspect", "--json"]);
+    let leases = inspected["state"]["leases"].as_array().unwrap();
+    assert_eq!(leases.len(), 1);
+    assert_eq!(leases[0]["sessionId"], "shell-a");
+    assert_eq!(
+        leases[0]["workspaceId"],
+        inspected["state"]["workspaces"][0]["id"]
+    );
+}
+
+#[test]
+fn previous_location_does_not_wait_for_workspace_preparation() {
+    use acre::git::repository::discover_repository;
+    use acre::state::lock::RepositoryLock;
+    use acre::state::paths::{repository_lock_path, repository_state_path};
+    use std::time::Duration;
+
+    let fixture = Fixture::new();
+    let (mut new, directive) = fixture.acre_in_shell(&["new", "feature/nav"], "busy-shell", &fixture.repo);
+    new.assert().success();
+    let workspace = PathBuf::from(&directive_fields(&directive)[2]);
+    let config = serde_json::from_slice(&fs::read(&fixture.config).unwrap()).unwrap();
+    let repository = discover_repository(&fixture.repo).unwrap();
+    let state_path = repository_state_path(&config, &repository);
+    let before = fs::read(&state_path).unwrap();
+    // A background replenisher may hold this lock while cloning a large environment.
+    let _lock = RepositoryLock::acquire(&repository_lock_path(&config, &repository)).unwrap();
+    for (from, to) in [(&workspace, &fixture.repo), (&fixture.repo, &workspace)] {
+        let (navigate, directive) = fixture.acre_in_shell(&["-"], "busy-shell", from);
+        assert_cmd::Command::from(navigate)
+            .timeout(Duration::from_secs(3))
+            .assert()
+            .success();
+        assert_eq!(
+            fs::canonicalize(&directive_fields(&directive)[2]).unwrap(),
+            fs::canonicalize(to).unwrap()
+        );
+    }
+    assert_eq!(
+        fs::read(state_path).unwrap(),
+        before,
+        "busy state must not be overwritten"
+    );
+}
+
+#[test]
+fn new_checks_preferred_slots_until_one_is_safe() {
+    use acre::git::repository::discover_repository;
+    use acre::state::repository::{load_repository_state, save_repository_state};
+
+    let fixture = Fixture::new();
+    fixture
+        .acre(&["config", "set", "pool.maxSlots", "3"])
+        .assert()
+        .success();
+    fixture
+        .acre(&["system", "warm", "--slots", "3"])
+        .assert()
+        .success();
+    let config = serde_json::from_slice(&fs::read(&fixture.config).unwrap()).unwrap();
+    let repository = discover_repository(&fixture.repo).unwrap();
+    let mut state = load_repository_state(&config, &repository).unwrap();
+    for (index, slot) in state.slots.iter_mut().enumerate() {
+        slot.last_used_at = format!("2026-01-0{}T00:00:00.000Z", index + 1);
+    }
+    save_repository_state(&config, &repository, &state).unwrap();
+    let oldest = &state.slots[0].path;
+    let selected = &state.slots[1].path;
+    let newest = &state.slots[2].path;
+    fs::write(newest.join("package.json"), "user changes").unwrap();
+    let trace = fixture.temp.path().join("git-trace.json");
+    let output = fixture
+        .acre(&["new", "feature/preferred", "--stay", "--json"])
+        .env("GIT_TRACE2_EVENT", &trace)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        fs::canonicalize(result["path"].as_str().unwrap()).unwrap(),
+        fs::canonicalize(selected).unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(newest.join("package.json")).unwrap(),
+        "user changes"
+    );
+    let checked: Vec<PathBuf> = fs::read_to_string(trace)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|event| event["worktree"].as_str().map(PathBuf::from))
+        .map(|path| fs::canonicalize(path).unwrap())
+        .collect();
+    assert!(checked.contains(&fs::canonicalize(newest).unwrap()));
+    assert!(checked.contains(&fs::canonicalize(selected).unwrap()));
+    assert!(
+        !checked.contains(&fs::canonicalize(oldest).unwrap()),
+        "unused slots should not be scanned"
+    );
 }
 
 #[test]

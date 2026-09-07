@@ -261,14 +261,11 @@ pub fn resolve_new_target(
         )
         .with_details(serde_json::json!({ "branch": branch })));
     }
-    let refs = list_refs(&repository.top_level)?;
     if repository
         .worktrees
         .iter()
         .any(|worktree| worktree.branch.as_deref() == Some(branch))
-        || refs
-            .iter()
-            .any(|reference| reference.kind == GitRefKind::Local && reference.short_name == branch)
+        || resolve_oid(&repository.top_level, &format!("refs/heads/{branch}"))?.is_some()
     {
         return Err(AcreError::new(
             "ACRE_BRANCH_EXISTS",
@@ -288,21 +285,19 @@ pub fn resolve_new_target(
     } else if let Some(from) = from {
         from.to_owned()
     } else if let Some(default_branch) = &repository.default_branch {
-        let remote_candidate = repository
-            .remote
-            .as_ref()
-            .map(|remote| format!("{remote}/{default_branch}"));
         // Prefer origin/main over local main: the local one may be stale.
-        remote_candidate
-            .filter(|candidate| {
-                refs.iter().any(|reference| {
-                    reference.kind == GitRefKind::Remote
-                        && reference.remote.as_ref().is_some_and(|remote| {
-                            format!("{remote}/{}", reference.short_name) == candidate.as_str()
-                        })
-                })
-            })
-            .unwrap_or_else(|| default_branch.clone())
+        match &repository.remote {
+            Some(remote)
+                if resolve_oid(
+                    &repository.top_level,
+                    &format!("refs/remotes/{remote}/{default_branch}"),
+                )?
+                .is_some() =>
+            {
+                format!("{remote}/{default_branch}")
+            }
+            _ => default_branch.clone(),
+        }
     } else {
         "HEAD".to_owned()
     };

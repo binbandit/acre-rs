@@ -80,30 +80,32 @@ pub fn select_slot(
     plan: &EnvironmentPlan,
     oid: &str,
 ) -> Result<WorkspaceSlot> {
-    let healthy: Vec<&WorkspaceSlot> = state
+    let mut candidates: Vec<&WorkspaceSlot> = state
         .slots
         .iter()
-        .filter(|slot| idle_slot_is_safe(config, repository, slot))
+        .filter(|slot| slot.status == WorkspaceStatus::Idle)
         .collect();
-    let chosen = healthy
-        .iter()
-        .filter(|slot| {
-            slot.environment
-                .as_ref()
-                .is_some_and(|environment| environment.fingerprint == plan.fingerprint)
-        })
-        // The most recently used match has the freshest caches.
-        .max_by_key(|slot| &slot.last_used_at)
-        .or_else(|| {
-            healthy.iter().find(|slot| {
-                slot.environment
-                    .as_ref()
-                    .is_none_or(|environment| environment.state == EnvironmentState::Cold)
+    let priority = |slot: &WorkspaceSlot| match &slot.environment {
+        Some(environment) if environment.fingerprint == plan.fingerprint => 0,
+        None => 1,
+        Some(environment) if environment.state == EnvironmentState::Cold => 1,
+        _ => 2,
+    };
+    candidates.sort_by(|left, right| {
+        priority(left)
+            .cmp(&priority(right))
+            .then_with(|| match priority(left) {
+                0 => right.last_used_at.cmp(&left.last_used_at),
+                1 => std::cmp::Ordering::Equal,
+                _ => left.last_used_at.cmp(&right.last_used_at),
             })
-        })
-        // Last resort: recycle the stalest slot, caches and all.
-        .or_else(|| healthy.iter().min_by_key(|slot| &slot.last_used_at))
-        .map(|slot| (*slot).clone());
+    });
+    // Safety checks inspect files and running processes. Check only candidates we might use,
+    // preserving every check for the selected slot and falling through when one is unsafe.
+    let chosen = candidates
+        .into_iter()
+        .find(|slot| idle_slot_is_safe(config, repository, slot))
+        .cloned();
     match chosen {
         Some(slot) => Ok(slot),
         None => create_slot(config, repository, state, oid, plan),

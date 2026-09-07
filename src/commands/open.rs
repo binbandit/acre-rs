@@ -49,13 +49,20 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
                 )
             })?;
         // Best effort on both sides: `-` should still move the shell if lease bookkeeping fails.
+        let previous_repository = discover_repository(&previous).ok();
+        let request = LeaseRequest::for_shell(&context.shell);
         if let Ok(current_repository) = discover_repository(&context.cwd) {
-            let _ = release_shell_session_lease(&config, &current_repository, session_id);
+            // Within one repository, acquiring the destination also releases the old lease.
+            // Keep that move in one transaction instead of loading and saving state twice.
+            if request.is_none()
+                || previous_repository
+                    .as_ref()
+                    .is_none_or(|previous| previous.common_dir != current_repository.common_dir)
+            {
+                let _ = release_shell_session_lease(&config, &current_repository, session_id);
+            }
         }
-        if let (Ok(previous_repository), Some(request)) = (
-            discover_repository(&previous),
-            LeaseRequest::for_shell(&context.shell),
-        ) {
+        if let (Some(previous_repository), Some(request)) = (previous_repository, request) {
             let _ = lease_workspace_by_path(&config, &previous_repository, &previous, &request);
         }
         let label = previous
