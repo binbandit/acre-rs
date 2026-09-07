@@ -92,10 +92,17 @@ def playground(root, binary, args):
         output = acre(*argv, cwd=cwd, extra={"GIT_TRACE2_EVENT": str(trace)} | (extra or {}))
         elapsed = (time.perf_counter() - started) * 1000
         events = [json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
+        commands = {event["sid"]: event["argv"] for event in events if event["event"] == "start"}
+        completed = [
+            {"milliseconds": round(event["t_abs"] * 1000, 2), "argv": commands[event["sid"]]}
+            for event in events
+            if event["event"] == "exit" and event["sid"] in commands
+        ]
         samples.setdefault(name, []).append({
             "milliseconds": round(elapsed, 2),
             "git_processes": sum(event.get("event") == "start" for event in events),
             "argv": argv,
+            "slowest_git_commands": sorted(completed, key=lambda row: row["milliseconds"], reverse=True)[:5],
         })
         return output
 

@@ -35,9 +35,12 @@ The script creates a persistent temporary playground with 1,000 branches spannin
 24 registered worktrees, 2,000 tracked files, 5,000 dependency-cache files, and eight warm slots.
 It measures cold and warm `acre new` calls and `acre -` shell directive round trips. On Unix it
 also holds the repository lock for two seconds to reproduce navigation during background
-workspace preparation. Each scenario saves individual timings and Git process traces, with
-medians in `results.json`. Pool replenishment is disabled during ordinary measurements so
+workspace preparation. Each scenario saves individual timings, its five slowest Git commands,
+and full Git process traces, with medians in `results.json`. Pool replenishment is disabled
+during ordinary measurements so
 background copying cannot contaminate the comparison. No network or user Acre state is used.
+Cold creation means an empty pool; the primary checkout still has dependency caches available
+to copy into a newly created worktree.
 
 Compare two saved binaries with identical fixture sizes:
 
@@ -60,7 +63,9 @@ eval "$("$ACRE_EXECUTABLE" shell init zsh)"
 Remove the printed playground directory when finished.
 
 The integration tests also verify that navigation completes while a repository lock remains
-held and that pool selection skips unsafe preferred slots without scanning unused candidates.
+held, moves leases correctly between repositories, and that pool selection skips unsafe
+preferred slots without scanning unused candidates. Creation must use exact ref lookups
+instead of enumerating every branch, while preserving local, remote, explicit, and fresh bases.
 These check the cause of the regression without imposing tight machine-dependent timings.
 
 ## Open limitations
