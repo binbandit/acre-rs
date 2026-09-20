@@ -232,16 +232,45 @@ struct CompletionArgs {
 }
 
 pub fn run() -> i32 {
-    let cli = Cli::parse();
+    let arguments: Vec<_> = std::env::args_os().collect();
+    let json = arguments
+        .iter()
+        .take_while(|value| value.as_os_str() != "--")
+        .any(|value| value == "--json");
+    let cli = match Cli::try_parse_from(&arguments) {
+        Ok(cli) => cli,
+        Err(error) => {
+            let code = error.exit_code();
+            if json {
+                let value = if code == 0 {
+                    serde_json::json!({"ok": true, "output": error.to_string()})
+                } else {
+                    serde_json::json!({"ok": false, "error": {"code": "ACRE_INVALID_ARGUMENT", "message": error.to_string(), "details": {}}})
+                };
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&value).expect("JSON error response")
+                );
+            } else {
+                let _ = error.print();
+            }
+            return code;
+        }
+    };
     // clap can't express "positional or subcommand, not both" without breaking `--json new`, so check here.
     if cli.target.is_some() && cli.command.is_some() {
-        use clap::CommandFactory;
-        Cli::command()
-            .error(
-                clap::error::ErrorKind::ArgumentConflict,
+        let context = create_context(
+            &cli,
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        );
+        return render_failure(
+            &context,
+            &AcreError::new(
+                "ACRE_INVALID_ARGUMENT",
                 "a target cannot be combined with a subcommand",
-            )
-            .exit();
+                crate::error::exit::USAGE,
+            ),
+        );
     }
     let cwd = match &cli.directory {
         Some(directory) => canonical_or_absolute(directory),
@@ -304,7 +333,7 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
         Some(Command::Completion(args)) => commands::shell::completion(context, args.shell),
         Some(Command::SessionId) => commands::internal::session_id(context),
         Some(Command::Resume { token }) => commands::internal::resume(context, &token),
-        Some(Command::Replenish { common_dir }) => commands::internal::replenish(&common_dir),
+        Some(Command::Replenish { common_dir }) => commands::internal::replenish(context, &common_dir),
         Some(Command::Complete { token }) => {
             commands::internal::complete(context, token.as_deref().unwrap_or(""))
         }

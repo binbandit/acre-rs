@@ -48,7 +48,7 @@ def playground(root, binary, args):
     git("init", "-q", "-b", "main")
     git("config", "user.name", "Acre Performance Playground")
     git("config", "user.email", "playground@example.invalid")
-    (repo / ".gitignore").write_text("node_modules/\n.env\n")
+    (repo / ".gitignore").write_text("node_modules\n.env\n")
     (repo / "package.json").write_text('{"name":"playground","private":true}\n')
     for index in range(args.files):
         path = repo / "packages" / f"pkg-{index % 20:02}" / f"file-{index:05}.js"
@@ -107,8 +107,17 @@ def playground(root, binary, args):
         return output
 
     print("  Timing cold creation, navigation, and warm creation...", flush=True)
+    def verify_cache(output):
+        result = json.loads(output.stdout)
+        workspace = Path(result["workspace_path"])
+        assert result["environment"]["state"] == "ready", "workspace did not receive its prepared cache"
+        for index in (0, args.cache_files - 1):
+            relative = Path("node_modules") / f"dep-{index // 20:04}" / f"file-{index:05}.js"
+            assert (workspace / relative).read_bytes() == (repo / relative).read_bytes(), "cache contents differ"
+
     for index in range(args.runs):
-        measure("new-cold", ["new", f"bench/cold-{index}", "--stay", "--json"])
+        output = measure("new-cold", ["new", f"bench/cold-{index}", "--stay", "--json"])
+        verify_cache(output)
 
     directive = root / "directive"
     shell = {
@@ -128,6 +137,7 @@ def playground(root, binary, args):
         acre("system", "warm")
         output = measure("new-warm", ["new", f"bench/warm-{index}", "--stay", "--json"])
         assert json.loads(output.stdout)["reused"], "warm creation did not reuse the pool"
+        verify_cache(output)
 
     if os.name == "posix":
         import fcntl
@@ -143,6 +153,54 @@ def playground(root, binary, args):
                 measure("previous-busy", ["-"], cwd=cwd, extra=shell)
             finally:
                 timer.join()
+
+    print("  Timing navigation during real background cache preparation...", flush=True)
+    background_trace = trace_dir / "replenisher.jsonl"
+    replenisher = subprocess.Popen(
+        [str(binary), "__replenish", str(repo / ".git")],
+        cwd=repo, env=env | {"GIT_TRACE2_EVENT": str(background_trace)},
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        start_new_session=os.name == "posix",
+    )
+    try:
+        # check-ignore precedes the actual cache copy. Observe the real worker, rather than
+        # approximating its behavior with a held lock or assuming a fixed startup delay.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            events = background_trace.read_text().splitlines() if background_trace.exists() else []
+            copying = False
+            for line in events:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # The worker may still be writing the last line.
+                copying |= event.get("event") == "start" and "check-ignore" in event.get("argv", [])
+            if copying:
+                break
+            if replenisher.poll() is not None:
+                raise RuntimeError("replenisher exited before preparing a cache")
+            time.sleep(0.01)
+        else:
+            raise TimeoutError("replenisher never reached cache preparation")
+        running_at_open = replenisher.poll() is None
+        measure("open-during-replenish", ["main"], cwd=cwd, extra=shell)
+        samples["open-during-replenish"][-1]["replenisher_running_at_open"] = running_at_open
+        _, stderr = replenisher.communicate(timeout=120)
+        if replenisher.returncode:
+            raise RuntimeError(stderr.decode())
+        inspected = json.loads(acre("system", "inspect", "--json").stdout)
+        idle = [slot for slot in inspected["state"]["slots"] if slot["status"] == "idle"]
+        assert len(idle) == args.slots, "replenishment did not refill the pool"
+        for slot in idle:
+            assert slot["environment"]["state"] == "ready", "replenisher produced a cold slot"
+    finally:
+        if replenisher.poll() is None:
+            if os.name == "posix":
+                import signal
+                os.killpg(replenisher.pid, signal.SIGKILL)
+            else:
+                replenisher.kill()
+            replenisher.communicate()
 
     write_json(root / "samples.json", samples)
     # No automatic shell integration or user config changes. This launcher targets only this fixture.

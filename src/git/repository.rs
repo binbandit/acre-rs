@@ -19,6 +19,8 @@ pub struct Repository {
     pub id: String,
     pub name: String,
     pub top_level: PathBuf,
+    #[serde(skip)]
+    pub invocation_dir: PathBuf,
     pub git_dir: PathBuf,
     pub common_dir: PathBuf,
     pub remote: Option<String>,
@@ -47,42 +49,10 @@ impl Repository {
 }
 
 pub fn discover_repository(cwd: &Path) -> Result<Repository> {
-    let result = run_git_with(
-        cwd,
-        &[
-            "rev-parse",
-            "--path-format=absolute",
-            "--show-toplevel",
-            "--git-dir",
-            "--git-common-dir",
-            "--is-inside-work-tree",
-        ],
-        RunOptions {
-            accepted_statuses: &[0, 128],
-            ..RunOptions::default()
-        },
-    )?;
-    if result.status != 0 {
-        return Err(AcreError::new(
-            "ACRE_NOT_IN_REPOSITORY",
-            "This directory is not inside a Git worktree.",
-            exit::ENVIRONMENT,
-        ));
-    }
-    let text = String::from_utf8_lossy(&result.stdout);
-    let lines: Vec<&str> = text.trim().lines().collect();
-    // Bare repositories answer everything but is-inside-work-tree; we need a checkout to work in.
-    if lines.len() < 4 || lines[3] != "true" {
-        return Err(AcreError::new(
-            "ACRE_NOT_IN_REPOSITORY",
-            "Acre needs a non-bare Git working tree.",
-            exit::ENVIRONMENT,
-        )
-        .with_details(serde_json::json!({ "cwd": cwd, "output": lines })));
-    }
-    let top_level = PathBuf::from(lines[0]);
-    let git_dir = PathBuf::from(lines[1]);
-    let common_dir = PathBuf::from(lines[2]);
+    // Each path is a separate response: embedded newlines must not split fields.
+    let top_level = repository_path(cwd, "--show-toplevel")?;
+    let git_dir = repository_path(cwd, "--git-dir")?;
+    let common_dir = repository_path(cwd, "--git-common-dir")?;
     // git happily lists worktrees whose directories have been deleted, so check the disk ourselves.
     let worktrees = with_existence(list_worktrees(&top_level)?);
     let config = read_repository_config(&top_level)?;
@@ -125,6 +95,7 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
         id: short_hash(identity, 16),
         name,
         top_level,
+        invocation_dir: canonical_or_absolute(cwd),
         git_dir,
         common_dir,
         remote,
@@ -133,6 +104,26 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
         current_worktree,
         worktrees,
     })
+}
+
+fn repository_path(cwd: &Path, option: &str) -> Result<PathBuf> {
+    let result = run_git_with(
+        cwd,
+        &["rev-parse", "--path-format=absolute", option],
+        RunOptions {
+            accepted_statuses: &[0, 128],
+            ..RunOptions::default()
+        },
+    )?;
+    if result.status != 0 {
+        return Err(AcreError::new(
+            "ACRE_NOT_IN_REPOSITORY",
+            "This directory is not inside a Git worktree.",
+            exit::ENVIRONMENT,
+        ));
+    }
+    let bytes = result.stdout.strip_suffix(b"\n").unwrap_or(&result.stdout);
+    Ok(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
 }
 
 pub fn discover_repository_from_common_dir(common_dir: &Path) -> Result<Repository> {
@@ -182,7 +173,7 @@ fn read_repository_config(cwd: &Path) -> Result<RepositoryConfigSnapshot> {
             "config",
             "--null",
             "--get-regexp",
-            "^(remote\\..*\\.url|init\\.defaultBranch)$",
+            "^(remote\\..*\\.url|init\\.defaultbranch)$",
         ],
         RunOptions {
             // get-regexp exits 1 when nothing matches, which is just a repo with no remotes.
@@ -206,7 +197,7 @@ fn read_repository_config(cwd: &Path) -> Result<RepositoryConfigSnapshot> {
             .and_then(|key| key.strip_suffix(".url"))
         {
             snapshot.remote_urls.insert(remote.to_owned(), value.to_owned());
-        } else if key == "init.defaultBranch" {
+        } else if key == "init.defaultbranch" {
             snapshot.default_branch = Some(value.to_owned());
         }
     }

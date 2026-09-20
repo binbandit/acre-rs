@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::model::{AcreConfig, EnvironmentState, TargetKind, TrustLevel};
 use crate::shell::directive::write_cd_directive;
 use crate::shell::navigation::navigation_destination;
-use crate::state::shell::record_navigation;
+use crate::shell::navigation::record_shell_move;
 use crate::ui::output::Renderer;
 use crate::util::{display_path, shell_quote};
 use crate::workspace::activate::MaterializedWorkspace;
@@ -38,8 +38,13 @@ pub fn navigate_to_materialized(
         renderer.line("Enable direct navigation with <blue>acre setup</blue>.");
         return Ok(destination);
     }
-    let session_id = context.shell.session_id.as_deref().expect("checked above");
-    record_navigation(config, session_id, &context.cwd, &destination, context.shell.pid)?;
+    record_shell_move(
+        context,
+        config,
+        &std::env::current_dir()?,
+        &destination,
+        result.lease.is_some(),
+    )?;
     write_cd_directive(context, &destination)?;
     Ok(destination)
 }

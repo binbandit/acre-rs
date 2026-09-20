@@ -4,15 +4,16 @@ use crate::error::{AcreError, Result, exit};
 use crate::git::operations::fetch_ref;
 use crate::git::refs::{GitRef, GitRefKind, list_refs, ref_exists, resolve_oid, validate_branch_name};
 use crate::git::repository::Repository;
+use crate::git::runner::run_git;
 use crate::git::worktrees::GitWorktree;
 use crate::model::WorkspaceStatus;
 use crate::model::{PullRequestTarget, RepositoryState, StoredTarget, TargetKind, TrustLevel};
 use crate::provider::github::{
-    ensure_pull_request_object, parse_pull_request_selector, resolve_pull_request,
+    ensure_pull_request_object, parse_pull_request_selector, pull_request_repository, resolve_pull_request,
+    validate_pull_request_url,
 };
 use crate::util::is_subsequence;
 use std::collections::BTreeSet;
-use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedTarget {
@@ -77,6 +78,7 @@ pub fn resolve_existing_target(
     // Only a bare selector can be a PR; `branch:pr:12` means a branch literally named that.
     if typed.kind == SelectorKind::Auto {
         if let Some(number) = parse_pull_request_selector(value) {
+            validate_pull_request_url(repository, value)?;
             return pull_request_target(repository, state, number);
         }
     }
@@ -113,13 +115,19 @@ fn pull_request_target(
     state: &RepositoryState,
     number: u64,
 ) -> Result<ResolvedTarget> {
+    let identity = pull_request_repository(repository)?;
     let held = state.workspaces.iter().find(|workspace| {
         workspace.status != WorkspaceStatus::Broken
             && workspace
                 .target
                 .pull_request
                 .as_ref()
-                .is_some_and(|pull_request| pull_request.number == number)
+                .is_some_and(|pull_request| {
+                    pull_request.number == number
+                        && (pull_request.repository == identity
+                            || (parse_pull_request_selector(&pull_request.url) == Some(number)
+                                && validate_pull_request_url(repository, &pull_request.url).is_ok()))
+                })
     });
     if let Some(existing) = held {
         if let Some(worktree) = repository.worktree_at(&existing.path) {
@@ -153,7 +161,7 @@ fn worktree_target(
     typed: &TypedSelector,
 ) -> Option<ResolvedTarget> {
     let value = typed.value.as_str();
-    let by_path = || repository.worktree_at(Path::new(value));
+    let by_path = || repository.worktree_at(&repository.invocation_dir.join(value));
     let by_branch = || {
         repository
             .worktrees
@@ -303,15 +311,27 @@ pub fn resolve_new_target(
 
     // --fresh refetches the base so the new branch starts from the remote's latest commit.
     if fresh {
-        if let Some(remote) = &repository.remote {
-            if let Some(remote_branch) = base_ref.strip_prefix(&format!("{remote}/")) {
-                fetch_ref(
-                    repository,
-                    remote,
-                    &format!("refs/heads/{remote_branch}"),
-                    Some(&format!("refs/remotes/{remote}/{remote_branch}")),
-                )?;
-            }
+        let qualified = base_ref.strip_prefix("refs/remotes/").unwrap_or(&base_ref);
+        let remotes = run_git(&repository.top_level, &["remote"])?;
+        // A first fetch has no tracking ref yet. Match configured remote names, longest
+        // first because a remote name may itself contain a slash.
+        let names = String::from_utf8_lossy(&remotes.stdout);
+        if let Some((remote, branch)) = names
+            .lines()
+            .filter_map(|remote| {
+                qualified
+                    .strip_prefix(&format!("{remote}/"))
+                    .filter(|branch| !branch.is_empty())
+                    .map(|branch| (remote, branch))
+            })
+            .max_by_key(|(remote, _)| remote.len())
+        {
+            fetch_ref(
+                repository,
+                remote,
+                &format!("refs/heads/{branch}"),
+                Some(&format!("refs/remotes/{remote}/{branch}")),
+            )?;
         }
     }
     let oid = resolve_oid(&repository.top_level, &base_ref)?.ok_or_else(|| {

@@ -22,7 +22,12 @@ pub fn show(context: &CommandContext) -> Result<i32> {
 }
 
 pub fn path(context: &CommandContext) -> Result<i32> {
-    Renderer::new(context).raw(format!("{}\n", config_path().display()));
+    let renderer = Renderer::new(context);
+    if context.global.json {
+        renderer.json(&serde_json::json!({"ok": true, "path": config_path()}));
+    } else {
+        renderer.raw(format!("{}\n", config_path().display()));
+    }
     Ok(exit::SUCCESS)
 }
 
@@ -37,7 +42,12 @@ pub fn init(context: &CommandContext, force: bool) -> Result<i32> {
         .with_details(serde_json::json!({ "path": target })));
     }
     save_config(&AcreConfig::default())?;
-    Renderer::new(context).line(format!("<green>Created</green> <dim>{}</dim>", target.display()));
+    let renderer = Renderer::new(context);
+    if context.global.json {
+        renderer.json(&serde_json::json!({"ok": true, "path": target}));
+    } else {
+        renderer.line(format!("<green>Created</green> <dim>{}</dim>", target.display()));
+    }
     Ok(exit::SUCCESS)
 }
 
@@ -46,15 +56,26 @@ pub fn set(context: &CommandContext, key: &str, value: &str) -> Result<i32> {
     let parsed = set_config_value(&mut config, key, value)?;
     save_config(&config)?;
     let renderer = Renderer::new(context);
-    renderer.line(format!(
-        "<green>Set</green> <blue>{}</blue> = {}",
-        renderer.value(key),
-        renderer.value(parsed.to_string())
-    ));
+    if context.global.json {
+        renderer.json(&serde_json::json!({"ok": true, "key": key, "value": parsed}));
+    } else {
+        renderer.line(format!(
+            "<green>Set</green> <blue>{}</blue> = {}",
+            renderer.value(key),
+            renderer.value(parsed.to_string())
+        ));
+    }
     Ok(exit::SUCCESS)
 }
 
-pub fn edit(_context: &CommandContext) -> Result<i32> {
+pub fn edit(context: &CommandContext) -> Result<i32> {
+    if context.global.json {
+        return Err(AcreError::new(
+            "ACRE_INTERACTIVE_COMMAND",
+            "Use config set to edit configuration in JSON mode.",
+            exit::USAGE,
+        ));
+    }
     let target = config_path();
     // Create the defaults first so the editor opens a real file rather than an empty buffer.
     if !target.exists() {
@@ -98,7 +119,12 @@ pub fn repo_init(context: &CommandContext, force: bool) -> Result<i32> {
         .with_details(serde_json::json!({ "path": target })));
     }
     write_default_repo_config(&target)?;
-    Renderer::new(context).line(format!("<green>Created</green> <dim>{}</dim>", target.display()));
+    let renderer = Renderer::new(context);
+    if context.global.json {
+        renderer.json(&serde_json::json!({"ok": true, "path": target}));
+    } else {
+        renderer.line(format!("<green>Created</green> <dim>{}</dim>", target.display()));
+    }
     Ok(exit::SUCCESS)
 }
 

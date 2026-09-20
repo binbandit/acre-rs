@@ -15,6 +15,7 @@ cargo build --release --locked
 - Unit tests sit next to the code: ref, status, and worktree parsing; markup; fingerprint normalisation; cache-root classification against a real Git repository.
 - `tests/safety.rs` reproduces lease bypass, untrusted cache reuse, symlink escapes, unsafe pool reuse and garbage collection, configuration normalization, nested manifest changes, hook execution, session path traversal, detached commits in active and idle workspaces, failed activation, changed cache-source manifests, missing PR trust metadata, and independent-clone state isolation.
 - `tests/state.rs` covers concurrent processes, crash release, failed writes, and legacy state-path compatibility. `tests/process.rs` covers simultaneous large input and output, inherited-pipe deadlines, and descendant cancellation.
+- `tests/replenish.rs` pauses a real replenisher before cache copying and verifies foreground progress, concurrent state updates, and preservation of worktrees opened or edited during preparation.
 - `tests/end_to_end.rs` drives the built binary through throwaway repositories: opening and returning workspaces, the shell directive round trip including `acre -`, the two-phase `done` that resumes after the shell moves, the machine acquire and release cycle, warm-pool reuse across branches, Python environments staying at their installation path, nested cache roots, recovery after lost state, repair accounting, and CLI flag ordering.
 
 ## What is exercised by hand
@@ -41,6 +42,10 @@ during ordinary measurements so
 background copying cannot contaminate the comparison. No network or user Acre state is used.
 Cold creation means an empty pool; the primary checkout still has dependency caches available
 to copy into a newly created worktree.
+Every creation checks cache readiness and sample file contents. A separate scenario starts the
+real `__replenish` worker and measures opening `main` while it prepares the next cache. This
+catches lock contention hidden by isolated timings. Use `--cache-files 100000 --slots 1 --runs 1`
+to exercise large copies without preparing many duplicate cache trees.
 
 Compare two saved binaries with identical fixture sizes:
 
@@ -78,3 +83,11 @@ Start with a disposable repository or a branch whose work is already committed. 
 ## Dependencies
 
 CI audits the committed lockfile against RustSec on pull requests, main pushes, and weekly. Run `cargo audit --deny warnings` locally when changing dependencies. CI actions use full commit SHAs; Dependabot proposes weekly updates with a seven-day cooldown. Review lockfile changes, new maintainers, build scripts, and transitive additions before merging. Advisory checks identify known issues, not undisclosed compromises.
+
+## Audit regressions
+
+`tests/regressions.rs` exercises the safety, state identity, selector, environment, and output fixes through the CLI on every CI platform. They also cover `done` with a directory override, exact subdirectory history after returning a workspace, remote names containing slashes, and directory seed normalization. The replenishment suite also changes the source manifests and caches while a real background copy is paused, then verifies the incompatible copy is discarded.
+
+On macOS, run `python3 tests/audit_regressions.py target/debug/acre` after building. CI runs these 41 additional regressions with the system Bash and Zsh, Node/npm, and `gh`. Fixtures isolate Git configuration, Acre state, and setup home directories. GitHub replies are stubbed; the real Enterprise routing probe uses placeholder credentials and a local proxy that refuses forwarding. Failed process probes are injected deliberately. Real child processes also verify detection in directories containing newlines, backslashes, control characters, and Unicode. Seed tests cover repeated separators and directory-only ignore rules, and provider tests cover owners and repositories named `pull`. The runner returns nonzero on any failure and prints the directory containing subprocess transcripts.
+
+The package-rename regression refreshes the trusted primary installation and verifies that opening a new generation replaces old workspace links and successfully imports the renamed package. The pnpm regression removes the primary cache to isolate invalidation of the old pool generation. Neither test treats directory-presence readiness as proof of installed-package health.

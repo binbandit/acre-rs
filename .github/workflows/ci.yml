@@ -25,6 +25,9 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo check --all-targets --locked
       - run: cargo test --all-targets --locked
+      - name: Audit CLI regressions
+        if: runner.os == 'macOS'
+        run: python3 tests/audit_regressions.py target/debug/acre
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo build --release --locked
 

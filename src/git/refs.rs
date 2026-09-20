@@ -46,12 +46,21 @@ pub fn list_refs(cwd: &Path) -> Result<Vec<GitRef>> {
             "refs/remotes",
         ],
     )?;
-    Ok(parse_refs(&result.stdout))
+    let remotes = run_git(cwd, &["remote"])?;
+    let names = String::from_utf8_lossy(&remotes.stdout);
+    Ok(parse_refs_with_remotes(
+        &result.stdout,
+        &names.lines().collect::<Vec<_>>(),
+    ))
 }
 
 /// Parses `for-each-ref` output: NUL-separated name, object id, and upstream per ref, with a
 /// newline between refs that lands at the start of the next name.
 pub fn parse_refs(buffer: &[u8]) -> Vec<GitRef> {
+    parse_refs_with_remotes(buffer, &[])
+}
+
+fn parse_refs_with_remotes(buffer: &[u8], remotes: &[&str]) -> Vec<GitRef> {
     let values: Vec<String> = buffer
         .split(|byte| *byte == 0)
         .map(|value| String::from_utf8_lossy(value).into_owned())
@@ -63,7 +72,7 @@ pub fn parse_refs(buffer: &[u8]) -> Vec<GitRef> {
             let oid = record[1].as_str();
             let upstream = record[2].trim_end_matches(['\r', '\n']);
             // origin/HEAD is a pointer, not a branch anyone opens.
-            if full_name.is_empty() || oid.is_empty() || full_name.ends_with("/HEAD") {
+            if full_name.is_empty() || oid.is_empty() {
                 return None;
             }
             if let Some(short_name) = full_name.strip_prefix("refs/heads/") {
@@ -82,7 +91,20 @@ pub fn parse_refs(buffer: &[u8]) -> Vec<GitRef> {
                     }),
                 });
             }
-            let (remote, short_name) = full_name.strip_prefix("refs/remotes/")?.split_once('/')?;
+            let qualified = full_name.strip_prefix("refs/remotes/")?;
+            // Remote names can contain slashes. Prefer the longest configured prefix.
+            let (remote, short_name) = remotes
+                .iter()
+                .filter_map(|remote| {
+                    qualified
+                        .strip_prefix(&format!("{remote}/"))
+                        .map(|branch| (*remote, branch))
+                })
+                .max_by_key(|(remote, _)| remote.len())
+                .or_else(|| qualified.split_once('/'))?;
+            if short_name == "HEAD" {
+                return None;
+            }
             Some(GitRef {
                 full_name: full_name.to_owned(),
                 short_name: short_name.to_owned(),

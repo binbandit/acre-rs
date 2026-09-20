@@ -64,12 +64,18 @@ impl RepositoryLock {
 
 pub fn is_pid_alive(pid: u32) -> bool {
     // pid 0 is the idle process on Windows and never a lease holder anywhere; short-circuit it.
-    if pid == 0 {
+    if pid == 0 || (cfg!(unix) && pid > i32::MAX as u32) {
         return false;
     }
     #[cfg(target_os = "linux")]
     {
-        Path::new("/proc").join(pid.to_string()).exists()
+        if !Path::new("/proc/self").exists() {
+            return true;
+        }
+        Path::new("/proc")
+            .join(pid.to_string())
+            .try_exists()
+            .unwrap_or(true)
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
@@ -77,7 +83,12 @@ pub fn is_pid_alive(pid: u32) -> bool {
         std::process::Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", "pid="])
             .output()
-            .is_ok_and(|output| output.status.success() && !output.stdout.trim_ascii().is_empty())
+            .map(|output| {
+                !(output.status.code() == Some(1)
+                    && output.stdout.trim_ascii().is_empty()
+                    && output.stderr.trim_ascii().is_empty())
+            })
+            .unwrap_or(true)
     }
     #[cfg(windows)]
     {
@@ -85,11 +96,17 @@ pub fn is_pid_alive(pid: u32) -> bool {
             // tasklist has no exit status worth trusting; look for the pid in its output instead.
             .args(["/FI", &format!("PID eq {pid}"), "/NH"])
             .output();
-        output.is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+        output
+            .map(|output| {
+                !output.status.success()
+                    || output.stdout.is_empty()
+                    || String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
+            })
+            .unwrap_or(true)
     }
     #[cfg(not(any(unix, windows)))]
     {
-        false
+        true
     }
 }
 

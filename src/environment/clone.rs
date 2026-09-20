@@ -1,12 +1,12 @@
 //! Reuses prepared caches: clones approved cache roots between worktrees, ideally as reflinks.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::environment::fingerprint::EnvironmentPlan;
 use crate::environment::inspect::inspect_environment;
-use crate::environment::roots::inspect_ignored;
+use crate::environment::roots::{inspect_ignored, overlaps_seed};
 use crate::error::{AcreError, Result};
 use crate::git::runner::{RunOptions, run_process};
 use crate::git::status::is_ignored_path;
@@ -25,48 +25,84 @@ pub fn clone_environment(
     destination_root: &Path,
     plan: &EnvironmentPlan,
 ) -> Result<EnvironmentSnapshot> {
-    let mut cloned_files = 0;
-    let mut cloned_bytes = 0;
-    let mut clone_mode = CloneMode::None;
+    prepare_environment(source_root, destination_root, plan)?.publish(destination_root, plan)
+}
 
-    // Only roots the source actually has; the plan lists what could exist, not what does.
+/// A cache copy kept outside the destination worktree until it can be published under its lock.
+pub struct PreparedEnvironment {
+    temporary: tempfile::TempDir,
+    source: PathBuf,
+    caches: Vec<(String, CloneReport)>,
+}
+
+pub fn prepare_environment(
+    source_root: &Path,
+    destination_root: &Path,
+    plan: &EnvironmentPlan,
+) -> Result<PreparedEnvironment> {
+    let parent = destination_root.parent().expect("worktree has a parent");
+    let mut prepared = PreparedEnvironment {
+        temporary: tempfile::tempdir_in(parent)?,
+        source: source_root.to_path_buf(),
+        caches: Vec::new(),
+    };
     for cache_root in inspect_ignored(source_root, &plan.cache_roots)?.cache_roots {
-        let source = source_root.join(&cache_root);
-        // Standard virtual environments embed installation paths. Reuse them in their stable
-        // slot, but never publish a copy whose scripts may still execute in the source checkout.
-        if source.join("pyvenv.cfg").symlink_metadata().is_ok() {
+        if overlaps_seed(&cache_root, &plan.seed_files) {
             continue;
         }
-        let destination = destination_root.join(&cache_root);
-        if has_symlink_parent(destination_root, Path::new(&cache_root))?
-            || !is_ignored_path(destination_root, &cache_root)?
+        let source = source_root.join(&cache_root);
+        // Virtual environments embed their installation path and cannot be relocated.
+        if source.join("pyvenv.cfg").symlink_metadata().is_ok()
+            || destination_root.join(&cache_root).symlink_metadata().is_ok()
+            || has_symlink_parent(destination_root, Path::new(&cache_root))?
+            || !is_ignored_path(destination_root, &format!("{cache_root}/"))?
         {
             continue;
         }
-        let parent = destination.parent().expect("cache path has a worktree parent");
-        ensure_directory(parent)?;
-        // Publish only a complete clone; failures must not leave a partial cache looking ready.
-        let temporary = tempfile::tempdir_in(parent)?;
-        let cloned = temporary.path().join("cache");
+        let cloned = prepared.temporary.path().join(prepared.caches.len().to_string());
         let report = clone_tree(&source, &cloned)?;
-        remove_path(&destination)?;
-        fs::rename(&cloned, &destination)?;
-        cloned_files += report.files;
-        cloned_bytes += report.bytes;
-        // Copy is sticky: one plain copy means the result is not honestly a reflink.
-        clone_mode = match (clone_mode, report.mode) {
-            (_, CloneMode::Copy) => CloneMode::Copy,
-            (CloneMode::None, CloneMode::Reflink) => CloneMode::Reflink,
-            (current, _) => current,
-        };
+        prepared.caches.push((cache_root, report));
     }
+    Ok(prepared)
+}
 
-    let mut snapshot = inspect_environment(destination_root, plan)?;
-    snapshot.source = Some(source_root.to_path_buf());
-    snapshot.cloned_files = Some(cloned_files);
-    snapshot.cloned_bytes = Some(cloned_bytes);
-    snapshot.clone_mode = Some(clone_mode);
-    Ok(snapshot)
+impl PreparedEnvironment {
+    pub fn publish(self, destination_root: &Path, plan: &EnvironmentPlan) -> Result<EnvironmentSnapshot> {
+        let mut cloned_files = 0;
+        let mut cloned_bytes = 0;
+        let mut clone_mode = CloneMode::None;
+
+        for (index, (cache_root, report)) in self.caches.iter().enumerate() {
+            let destination = destination_root.join(cache_root);
+            // Preparation may have run without the repository lock. An installation or tracked
+            // path that appeared since then belongs to its creator and must not be replaced.
+            if destination.symlink_metadata().is_ok()
+                || has_symlink_parent(destination_root, Path::new(cache_root))?
+                || !is_ignored_path(destination_root, &format!("{cache_root}/"))?
+            {
+                continue;
+            }
+            let parent = destination.parent().expect("cache path has a worktree parent");
+            ensure_directory(parent)?;
+            let cloned = self.temporary.path().join(index.to_string());
+            fs::rename(&cloned, &destination)?;
+            cloned_files += report.files;
+            cloned_bytes += report.bytes;
+            // Copy is sticky: one plain copy means the result is not honestly a reflink.
+            clone_mode = match (clone_mode, report.mode) {
+                (_, CloneMode::Copy) => CloneMode::Copy,
+                (CloneMode::None, CloneMode::Reflink) => CloneMode::Reflink,
+                (current, _) => current,
+            };
+        }
+
+        let mut snapshot = inspect_environment(destination_root, plan)?;
+        snapshot.source = Some(self.source.clone());
+        snapshot.cloned_files = Some(cloned_files);
+        snapshot.cloned_bytes = Some(cloned_bytes);
+        snapshot.clone_mode = Some(clone_mode);
+        Ok(snapshot)
+    }
 }
 
 pub fn clear_cache_roots(root: &Path, cache_roots: &[String]) -> Result<()> {

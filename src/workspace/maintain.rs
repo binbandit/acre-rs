@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::error::Result;
-use crate::git::operations::{prune_worktrees, remove_worktree, repair_worktrees};
+use crate::git::operations::remove_worktree;
 use crate::git::repository::Repository;
 use crate::model::{AcreConfig, RepositoryState, WorkspaceSlot, WorkspaceStatus};
 use crate::state::repository::{LockedRepository, save_repository_state, stored_repository_state};
@@ -35,10 +35,21 @@ pub struct GcReport {
 }
 
 pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repository) -> Result<RepairReport> {
-    // Git's own locking covers these; Acre's lock is for the state that gets rebuilt below.
-    let _ = prune_worktrees(repository_input);
-    let _ = repair_worktrees(repository_input);
-    let locked = LockedRepository::open(config, repository_input)?;
+    let mut locked = LockedRepository::open(config, repository_input)?;
+    let owned = locked.state.slots.iter().map(|slot| &slot.path).chain(
+        locked
+            .state
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.ownership == crate::model::WorkspaceOwnership::Acre)
+            .map(|workspace| &workspace.path),
+    );
+    for path in owned {
+        if matches!(path.try_exists(), Ok(false)) {
+            let _ = remove_worktree(&locked.repository, path, false);
+        }
+    }
+    locked.repository = crate::git::repository::discover_repository(&repository_input.top_level)?;
     let repository = &locked.repository;
     // Loading recovers unregistered Acre worktrees, so anything absent from the persisted
     // state afterwards was recovered by this repair.
@@ -52,7 +63,7 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
         .flat_map(|state| state.workspaces.iter().map(|workspace| workspace.id.as_str()))
         .collect();
     let mut state = locked.state.clone();
-    // After prune, anything git no longer registers is gone for good; drop its record.
+    // Drop only records whose registration is gone. External registrations are never pruned.
     let registered: BTreeSet<_> = repository
         .worktrees
         .iter()

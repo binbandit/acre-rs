@@ -9,13 +9,17 @@ use crate::ui::markup::{escape_markup, render_markup};
 
 pub struct Renderer {
     color: bool,
+    plain: bool,
 }
 
 impl Renderer {
     pub fn new(context: &CommandContext) -> Self {
         let color =
             !context.global.no_color && !context.global.plain && std::env::var_os("NO_COLOR").is_none();
-        Self { color }
+        Self {
+            color,
+            plain: context.global.plain,
+        }
     }
 
     pub fn line(&self, markup: impl AsRef<str>) {
@@ -56,6 +60,25 @@ impl Renderer {
 
     pub fn format(&self, markup: &str, tty: bool) -> String {
         // The caller says whether its stream is a tty; a pipe never gets escape codes.
-        render_markup(markup, self.color && tty)
+        let text = render_markup(markup, self.color && tty);
+        if !self.plain {
+            return text;
+        }
+        let mut ascii = String::new();
+        for character in text.chars() {
+            match character {
+                '→' => ascii.push_str("->"),
+                '←' => ascii.push_str("<-"),
+                '·' | '•' => ascii.push('-'),
+                '’' | '‘' => ascii.push('\''),
+                '“' | '”' => ascii.push('"'),
+                '…' => ascii.push_str("..."),
+                '✓' => ascii.push_str("ok"),
+                '✗' => ascii.push('x'),
+                value if value.is_ascii() => ascii.push(value),
+                value => ascii.extend(value.escape_unicode()),
+            }
+        }
+        ascii
     }
 }

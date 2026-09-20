@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use crate::environment::clone::{clear_cache_roots, clone_environment};
+use crate::environment::clone::{clear_cache_roots, prepare_environment};
 use crate::environment::fingerprint::{EnvironmentPlan, build_environment_plan};
 use crate::environment::inspect::inspect_environment;
-use crate::environment::roots::inspect_ignored;
+use crate::environment::roots::unknown_ignored_files;
 use crate::environment::seed::{clear_seed_files, seed_files_only, snapshot_seed_files};
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::{bind_target, delete_branch_if_expected, detach_workspace, reset_workspace};
@@ -21,7 +21,7 @@ use crate::state::index::remember_repository;
 use crate::state::repository::{LockedRepository, save_repository_state};
 use crate::util::{canonical_or_absolute, now_iso, random_short};
 use crate::workspace::lease::{self, LeaseRequest};
-use crate::workspace::pool::{find_environment_source, idle_slot_count, select_slot};
+use crate::workspace::pool::{find_environment_source, idle_slot_count, select_slot, source_matches_plan};
 use crate::workspace::resolve::ResolvedTarget;
 
 #[derive(Debug, Clone)]
@@ -52,10 +52,22 @@ pub fn materialize_workspace(
     let mut locked = LockedRepository::open(config, repository)?;
     // Rediscovered under the lock; the caller's copy may predate another process's changes.
     let repository = locked.repository.clone();
+    // Release discovers leases through this index. Fail before issuing one if it cannot be saved.
+    remember_repository(config, &repository)?;
     let state = &mut locked.state;
 
     // An existing worktree, Acre-owned or not, is opened where it already is.
     if let Some(existing) = &target.existing_worktree {
+        if repository
+            .worktree_at(&existing.path)
+            .is_none_or(|current| !current.exists || current.branch != existing.branch)
+        {
+            return Err(AcreError::new(
+                "ACRE_TARGET_MOVED",
+                "The worktree changed while Acre was opening it. Run the command again.",
+                exit::CONFLICT,
+            ));
+        }
         // Reopening a known slot reserves it; other unrecorded worktrees remain external.
         let workspace =
             match state.workspace_at(&existing.path) {
@@ -79,7 +91,6 @@ pub fn materialize_workspace(
             .as_ref()
             .map(|request| lease::acquire(state, &workspace.id, request));
         locked.save(config)?;
-        let _ = remember_repository(config, &repository);
         return Ok(materialized(
             &repository,
             target,
@@ -96,7 +107,9 @@ pub fn materialize_workspace(
     if let Some(active) = state
         .workspace_for_target(&stored_target)
         // A record whose directory is gone is a broken workspace, not one we can reopen.
-        .filter(|active| active.path.exists())
+        .filter(|active| repository.worktree_at(&active.path).is_some_and(|worktree| {
+            worktree.exists && (target.local_branch.is_none() || worktree.branch == target.local_branch)
+        }))
         .cloned()
     {
         // A workspace still claims this branch name even though git lost the ref; don't pile a new branch onto it.
@@ -126,15 +139,16 @@ pub fn materialize_workspace(
 
     // The plan comes from the target commit's manifests, not from whatever the primary has checked out.
     let plan = build_environment_plan(&repository, &target.oid, config)?;
-    let slot = select_slot(config, &repository, state, &plan, &target.oid)?;
+    let (slot, existing_slot) = select_slot(config, &repository, state, &plan, &target.oid)?;
     // Withdraw the slot before changing files. A crash or failed activation then recovers it
     // as retained, never as an idle slot with an obsolete cache fingerprint.
     state.slots.retain(|candidate| candidate.id != slot.id);
     save_repository_state(config, &repository, state)?;
-    let reused = slot
-        .environment
-        .as_ref()
-        .is_some_and(|environment| environment.fingerprint == plan.fingerprint);
+    let reused = existing_slot
+        && slot
+            .environment
+            .as_ref()
+            .is_some_and(|environment| environment.fingerprint == plan.fingerprint);
     if !reused {
         // The slot holds another generation's caches: drop them and reset to the target commit.
         let roots: Vec<String> = slot
@@ -153,6 +167,7 @@ pub fn materialize_workspace(
 
     // Filled by activate as it copies, so the rollback below knows exactly what to remove.
     let mut seeded_paths = Vec::new();
+    let mut created_branch = None;
     let activation = activate(
         config,
         &repository,
@@ -164,17 +179,23 @@ pub fn materialize_workspace(
         &active_path,
         reused,
         &mut seeded_paths,
+        &mut created_branch,
     );
     let (workspace, lease) = match activation {
         Ok(activated) => activated,
         Err(error) => {
-            rollback(&repository, target, &active_path, &seeded_paths);
+            rollback(
+                &repository,
+                target,
+                &active_path,
+                &seeded_paths,
+                created_branch.as_deref(),
+            );
             return Err(error);
         }
     };
     let replenish =
         config.pool.replenish && !options.no_replenish && idle_slot_count(state) < config.pool.min_slots;
-    let _ = remember_repository(config, &repository);
     // Release the lock before spawning: the replenisher needs it.
     drop(locked);
     if replenish {
@@ -205,9 +226,10 @@ fn activate(
     active_path: &Path,
     reused: bool,
     seeded_paths: &mut Vec<String>,
+    created_branch: &mut Option<String>,
 ) -> Result<(WorkspaceRecord, Option<WorkspaceLease>)> {
     // Bind before seeding: the baseline below reads ignore rules, and those belong to the target commit.
-    bind_target(repository, active_path, target)?;
+    bind_target(repository, active_path, target, created_branch)?;
     // Seed files always come from the primary checkout, the one copy the user actually maintains.
     let seed_source = repository.primary_path();
     // Three ways to arrive at caches: already in the slot, cloned from a sibling, or none yet.
@@ -218,10 +240,14 @@ fn activate(
             ..inspect_environment(active_path, plan)?
         }
     } else if let Some(source) = find_environment_source(config, repository, state, plan, active_path) {
-        match clone_environment(&source, active_path, plan) {
-            Ok(snapshot) => snapshot,
+        match prepare_environment(&source, active_path, plan)
+            .ok()
+            .filter(|_| source_matches_plan(config, repository, &source, plan))
+            .and_then(|prepared| prepared.publish(active_path, plan).ok())
+        {
+            Some(snapshot) => snapshot,
             // A failed clone is not fatal: the workspace opens cold and the user installs as usual.
-            Err(_) => inspect_environment(active_path, plan)?,
+            None => inspect_environment(active_path, plan)?,
         }
     } else {
         inspect_environment(active_path, plan)?
@@ -235,7 +261,7 @@ fn activate(
     )?;
 
     // Whatever is ignored now was ours; only additions count against `done` later.
-    let baseline_ignored = inspect_ignored(active_path, &environment.cache_roots)?.unknown;
+    let baseline_ignored = unknown_ignored_files(active_path, &environment.cache_roots)?;
     // Hash what we copied so `done` can tell an edited .env from an untouched one.
     let baseline_seed_files = snapshot_seed_files(active_path, seeded_paths)?;
     let timestamp = now_iso();
@@ -277,7 +303,13 @@ fn activate(
 }
 
 /// Scrubs a half-activated slot and removes any branch created for it.
-fn rollback(repository: &Repository, target: &ResolvedTarget, active_path: &Path, seeded_paths: &[String]) {
+fn rollback(
+    repository: &Repository,
+    target: &ResolvedTarget,
+    active_path: &Path,
+    seeded_paths: &[String],
+    created_branch: Option<&str>,
+) {
     if active_path.exists() {
         let _ = detach_workspace(active_path);
         if clear_seed_files(active_path, seeded_paths).is_err() {
@@ -285,10 +317,8 @@ fn rollback(repository: &Repository, target: &ResolvedTarget, active_path: &Path
         }
     }
     // Only branches we created ourselves, and delete_branch_if_expected still refuses if they moved.
-    if matches!(target.kind, TargetKind::NewBranch | TargetKind::RemoteBranch) {
-        if let Some(branch) = &target.local_branch {
-            let _ = delete_branch_if_expected(repository, branch, &target.oid);
-        }
+    if let Some(branch) = created_branch {
+        let _ = delete_branch_if_expected(repository, branch, &target.oid);
     }
 }
 

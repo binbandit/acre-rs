@@ -32,6 +32,7 @@ pub fn stored_repository_state(config: &AcreConfig, repository: &Repository) -> 
         .filter(|state| state.schema_version == 1 && state.repository_common_dir == repository.common_dir)
         .map(|mut state| {
             state.repository_id.clone_from(&repository.id);
+            state.repository_name.clone_from(&repository.name);
             for workspace in &mut state.workspaces {
                 workspace.repository_id.clone_from(&repository.id);
             }
@@ -72,7 +73,22 @@ fn reconcile_state(mut state: RepositoryState, worktrees: &[GitWorktree]) -> Rep
     for workspace in &mut state.workspaces {
         let path = canonical_or_absolute(&workspace.path);
         match registered.get(&path) {
-            Some(worktree) if worktree.exists && !worktree.prunable => {}
+            Some(worktree) if worktree.exists && !worktree.prunable => {
+                // Keep the original binding when detached: it is the baseline protecting
+                // new detached commits and lets `done <original-name>` report that refusal.
+                if let Some(branch) = &worktree.branch {
+                    if workspace.target.local_branch.as_ref() != Some(branch) {
+                        workspace.target = StoredTarget {
+                            kind: TargetKind::LocalBranch,
+                            display_name: branch.clone(),
+                            oid: worktree.head.clone(),
+                            local_branch: Some(branch.clone()),
+                            remote_branch: None,
+                            pull_request: None,
+                        };
+                    }
+                }
+            }
             _ => workspace.status = WorkspaceStatus::Broken,
         }
     }

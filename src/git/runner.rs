@@ -216,7 +216,17 @@ pub fn run_passthrough(executable: &str, args: &[std::ffi::OsString], cwd: &Path
                 exit::ENVIRONMENT,
             )
         })?;
-    Ok(status.code().unwrap_or(1))
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        Ok(status
+            .code()
+            .unwrap_or_else(|| status.signal().map_or(1, |signal| 128 + signal)))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(status.code().unwrap_or(1))
+    }
 }
 
 pub fn decode_stdout(result: &ProcessResult) -> String {

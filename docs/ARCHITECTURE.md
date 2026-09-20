@@ -84,7 +84,7 @@ Git is authoritative for repository discovery, worktree registrations, refs, sta
 
 ## State
 
-Acre state lives outside repositories under the configured root (default `~/.acre`). `ACRE_CONFIG` selects the configuration file. Writes use a temporary file in the same directory, `sync_all`, atomic rename, and parent-directory sync where supported.
+Acre state lives outside repositories under the configured root (default `~/.acre`). `ACRE_CONFIG` selects the configuration file. Relative roots are resolved against that configuration file's directory, so navigation does not change the store. Writes use a temporary file in the same directory, `sync_all`, atomic rename, and parent-directory sync where supported.
 
 Persisted state is reconstructable from Git worktree registrations and Acre-owned path boundaries. Recovered ownership is treated conservatively.
 
@@ -92,7 +92,7 @@ Persisted state is reconstructable from Git worktree registrations and Acre-owne
 
 Acre is correct command-by-command. Pool replenishment may use a short-lived detached Acre process, but correctness never depends on a permanently running service.
 
-Repository identity comes from the canonical Git common directory, so independent clones do not share state. Existing remote-keyed state keeps its paths when it belongs to that common directory. Repository and index updates use OS-backed file locks via `fs4`; temporary files use `tempfile`.
+Repository identity comes from the canonical Git common directory, so independent clones do not share state. New repository directories use that immutable identity alone. Existing name-keyed and remote-keyed state keeps its paths when it belongs to that common directory, including recovery from missing state. Repository and index updates use OS-backed file locks via `fs4`; temporary files use `tempfile`.
 
 Workspace directories identify reusable slots, not branches. New slots live under `workspaces/<slot-id>`; existing managed directories keep their locations. Branch and PR names are display labels. Missing state or an interrupted activation recovers orphaned worktrees as retained workspaces, since a detached checkout alone does not prove it safe to recycle. Each reusable slot records its commit so later detached commits cannot be lost through reuse or garbage collection.
 

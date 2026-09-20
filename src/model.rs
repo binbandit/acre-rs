@@ -186,6 +186,8 @@ pub struct PendingDoneOperation {
     // Checked when the resumed `done` comes back: the tree must be exactly as assessed.
     pub expected_status_fingerprint: String,
     pub safe_destination: PathBuf,
+    #[serde(default)]
+    pub original_directory: Option<PathBuf>,
     pub current_session_id: Option<String>,
     pub created_at: String,
 }

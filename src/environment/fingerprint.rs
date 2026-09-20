@@ -6,7 +6,7 @@ use std::process::Command;
 use serde_json::{Map, Value, json};
 
 use crate::environment::definitions::{ALL_FINGERPRINT_FILES, detect_ecosystems};
-use crate::error::Result;
+use crate::error::{AcreError, Result, exit};
 use crate::git::content::read_matching_files_at_ref;
 use crate::git::repository::Repository;
 use crate::model::AcreConfig;
@@ -85,6 +85,19 @@ pub fn build_environment_plan(
             json!([file, sha256(normalized)])
         })
         .collect();
+    for seed in &seed_files {
+        for cache in &cache_roots {
+            if format!("/{seed}/").contains(&format!("/{cache}/")) || cache.starts_with(&format!("{seed}/")) {
+                return Err(AcreError::new(
+                    "ACRE_CONFIG_INVALID",
+                    format!(
+                        "Seed path {seed} overlaps cache root {cache}. Keep secrets outside cache roots."
+                    ),
+                    exit::USAGE,
+                ));
+            }
+        }
+    }
     // Native modules and build outputs don't survive an OS or Node major change.
     let platform_key = format!(
         "{}:{}:{}:{}",
@@ -128,6 +141,14 @@ fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
     // Only the keys that change what an install produces; editing scripts.test shouldn't invalidate caches.
     let mut relevant = Map::new();
     for key in [
+        "name",
+        "version",
+        "bin",
+        "os",
+        "cpu",
+        "libc",
+        "bundledDependencies",
+        "bundleDependencies",
         "packageManager",
         "engines",
         "volta",
@@ -203,5 +224,18 @@ mod tests {
             normalize_fingerprint_content("package.json", a),
             normalize_fingerprint_content("package.json", b)
         );
+    }
+
+    #[test]
+    fn workspace_identity_and_install_links_affect_fingerprints() {
+        for field in ["name", "version", "bin"] {
+            let before = serde_json::json!({field: "before"}).to_string();
+            let after = serde_json::json!({field: "after"}).to_string();
+            assert_ne!(
+                normalize_fingerprint_content("packages/a/package.json", before.as_bytes()),
+                normalize_fingerprint_content("packages/a/package.json", after.as_bytes()),
+                "{field}"
+            );
+        }
     }
 }

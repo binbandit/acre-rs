@@ -101,6 +101,43 @@ fn nested_cache_roots_do_not_block_done() {
 }
 
 #[test]
+fn directory_ignore_rules_allow_cache_cloning_into_a_new_worktree() {
+    let fixture = Fixture::new();
+    fs::write(fixture.repo.join(".gitignore"), "node_modules/\n").unwrap();
+    common::git(&fixture.repo, &["commit", "-am", "ignore cache directories"]);
+    fs::create_dir_all(fixture.repo.join("node_modules/dep")).unwrap();
+    fs::write(
+        fixture.repo.join("node_modules/dep/index.js"),
+        "prepared dependency",
+    )
+    .unwrap();
+    let workspace = fixture.open_workspace("prepared");
+    assert_eq!(
+        fs::read_to_string(workspace.join("node_modules/dep/index.js")).unwrap(),
+        "prepared dependency"
+    );
+}
+
+#[test]
+fn cache_cloning_never_replaces_a_tracked_destination() {
+    let fixture = Fixture::new();
+    fs::write(fixture.repo.join(".gitignore"), "node_modules/\n").unwrap();
+    common::git(&fixture.repo, &["commit", "-am", "ignore cache directories"]);
+    fs::create_dir_all(fixture.repo.join("node_modules/dep")).unwrap();
+    fs::write(fixture.repo.join("node_modules/dep/index.js"), "prepared").unwrap();
+    fixture.open_workspace("cache-source");
+    fs::remove_dir_all(fixture.repo.join("node_modules")).unwrap();
+    fs::write(fixture.repo.join("node_modules"), "tracked data").unwrap();
+    common::git(&fixture.repo, &["add", "-f", "node_modules"]);
+    common::git(&fixture.repo, &["commit", "-m", "track a path with a cache name"]);
+    let destination = fixture.open_workspace("tracked-destination");
+    assert_eq!(
+        fs::read_to_string(destination.join("node_modules")).unwrap(),
+        "tracked data"
+    );
+}
+
+#[test]
 fn global_flags_may_precede_the_subcommand() {
     let fixture = Fixture::new();
     let inspected = fixture.json(&["--json", "system", "inspect"]);
@@ -201,7 +238,11 @@ fn previous_location_moves_leases_between_repositories() {
     first.assert().success();
     let first = PathBuf::from(&directive_fields(&directive)[2]);
     // Keep one Acre configuration and shell history while visiting another repository.
-    let (mut second, directive) = fixture.acre_in_shell(&["new", "second"], "cross-repo", &other.repo);
+    let (mut second, directive) = fixture.acre_in_shell(
+        &["-C", other.repo.to_str().unwrap(), "new", "second"],
+        "cross-repo",
+        &first,
+    );
     second.assert().success();
     let second = PathBuf::from(&directive_fields(&directive)[2]);
     for (from, to, source_repo, destination_repo) in [
@@ -210,7 +251,10 @@ fn previous_location_moves_leases_between_repositories() {
     ] {
         let (mut navigate, directive) = fixture.acre_in_shell(&["-"], "cross-repo", from);
         navigate.assert().success();
-        assert_eq!(PathBuf::from(&directive_fields(&directive)[2]), *to);
+        assert_eq!(
+            fs::canonicalize(&directive_fields(&directive)[2]).unwrap(),
+            fs::canonicalize(to).unwrap()
+        );
         for (repo, expected) in [(source_repo, 0), (destination_repo, 1)] {
             let output = fixture
                 .acre(&["system", "inspect", "--json"])

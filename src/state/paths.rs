@@ -6,15 +6,19 @@ use crate::error::{AcreError, Result, exit};
 use crate::git::repository::Repository;
 use crate::model::{AcreConfig, RepositoryState};
 use crate::state::storage::read_json;
-use crate::util::{absolute, home_dir, repository_slug, short_hash};
+use crate::util::{absolute, expand_home, home_dir};
 
 pub fn default_acre_root() -> PathBuf {
     home_dir().join(".acre")
 }
 
 pub fn acre_root(config: &AcreConfig) -> PathBuf {
-    // Config may say `~/.acre` or a relative path; resolve it once here.
-    absolute(&config.root)
+    let root = expand_home(&config.root);
+    if root.is_absolute() {
+        root
+    } else {
+        config_path().parent().expect("config has a parent").join(root)
+    }
 }
 
 pub fn config_path() -> PathBuf {
@@ -31,19 +35,35 @@ pub fn repository_index_path(config: &AcreConfig) -> PathBuf {
 
 pub fn repository_root(config: &AcreConfig, repository: &Repository) -> PathBuf {
     let repositories = acre_root(config).join("repositories");
-    if let Some(remote) = &repository.remote_url {
-        let legacy = repositories.join(repository_slug(&repository.name, &short_hash(remote, 16)));
-        // Keep existing workspace paths when upgrading from remote-keyed state, but never adopt
-        // another clone's records. New clones use their own common-directory identity.
-        if read_json::<RepositoryState>(&legacy.join("state.json"))
+    let stable = repositories.join(&repository.id);
+    if stable.exists() {
+        return stable;
+    }
+    // Preserve existing paths from both name-keyed and remote-keyed versions.
+    let mut existing = std::fs::read_dir(&repositories)
+        .into_iter()
+        .flatten()
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    existing.sort();
+    for path in existing {
+        if read_json::<RepositoryState>(&path.join("state.json"))
             .ok()
             .flatten()
             .is_some_and(|state| state.repository_common_dir == repository.common_dir)
         {
-            return legacy;
+            return path;
+        }
+        if repository.worktrees.iter().any(|worktree| {
+            crate::util::is_inside(&path.join("workspaces"), &worktree.path)
+                || crate::util::is_inside(&path.join("slots"), &worktree.path)
+        }) {
+            // Recovery must still find older directories whose state was lost or corrupted.
+            return path;
         }
     }
-    repositories.join(repository_slug(&repository.name, &repository.id))
+    stable
 }
 
 pub fn repository_state_path(config: &AcreConfig, repository: &Repository) -> PathBuf {

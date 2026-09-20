@@ -22,14 +22,10 @@ pub fn record_navigation(
     to: &Path,
     pid: Option<u32>,
 ) -> Result<()> {
-    let current = read_shell_state(config, id)?;
-    let previous = match current
-        .as_ref()
-        .and_then(|state| state.current_directory.as_ref())
-    {
-        // Re-entering the recorded current directory would otherwise make "previous" point at itself.
-        Some(directory) if directory != to => Some(directory.clone()),
-        _ => Some(from.to_path_buf()),
+    let previous = if from == to {
+        read_shell_state(config, id)?.and_then(|state| state.previous_directory)
+    } else {
+        Some(from.to_path_buf())
     };
     let state = ShellSessionState {
         schema_version: 1,

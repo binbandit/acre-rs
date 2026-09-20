@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
-use crate::git::repository::Repository;
+use crate::git::repository::{Repository, discover_repository};
 use crate::model::AcreConfig;
 use crate::shell::directive::write_cd_directive;
-use crate::state::shell::record_navigation;
+use crate::state::shell::{read_shell_state, record_navigation};
 use crate::ui::output::Renderer;
 use crate::util::{display_path, is_inside};
+use crate::workspace::lease::{LeaseRequest, lease_workspace_by_path, release_shell_session_lease};
 
 pub fn navigation_destination(
     context: &CommandContext,
@@ -54,9 +55,7 @@ pub fn navigate_direct(
             "hint": "acre setup",
         })));
     }
-    let session_id = context.shell.session_id.as_deref().expect("checked above");
-    // Record before writing the directive, so `acre -` works even if the cd itself fails.
-    record_navigation(config, session_id, &context.cwd, destination, context.shell.pid)?;
+    record_shell_move(context, config, &std::env::current_dir()?, destination, false)?;
     let renderer = Renderer::new(context);
     renderer.line(format!(
         "<green>→</green> <bold><blue>{}</blue></bold>",
@@ -70,4 +69,43 @@ pub fn navigate_direct(
         ));
     }
     write_cd_directive(context, destination)
+}
+
+/// Keep navigation responsive when another operation holds a repository lock. History is
+/// durable; lease updates use the same best-effort behavior as the previous-location shortcut.
+pub fn record_shell_move(
+    context: &CommandContext,
+    config: &AcreConfig,
+    from: &Path,
+    to: &Path,
+    destination_leased: bool,
+) -> Result<()> {
+    let Some(session) = context
+        .shell
+        .session_id
+        .as_deref()
+        .filter(|_| context.shell.active)
+    else {
+        return Ok(());
+    };
+    let destination = discover_repository(to).ok();
+    let previous = read_shell_state(config, session)?.and_then(|state| state.current_directory);
+    let mut released = std::collections::BTreeSet::new();
+    for source in previous.as_deref().into_iter().chain(std::iter::once(from)) {
+        if let Ok(repository) = discover_repository(source) {
+            if destination
+                .as_ref()
+                .is_none_or(|target| target.common_dir != repository.common_dir)
+                && released.insert(repository.common_dir.clone())
+            {
+                let _ = release_shell_session_lease(config, &repository, session);
+            }
+        }
+    }
+    if !destination_leased {
+        if let (Some(repository), Some(request)) = (destination, LeaseRequest::for_shell(&context.shell)) {
+            let _ = lease_workspace_by_path(config, &repository, to, &request);
+        }
+    }
+    record_navigation(config, session, from, to, context.shell.pid)
 }

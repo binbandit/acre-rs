@@ -13,6 +13,8 @@ A generation fingerprint contains:
 - resolved cache and required roots;
 - operating system, architecture, OS major version, and Node major version.
 
+Ecosystems are detected in nested projects as well as at the repository root. Package identity (`name`, `version`), executable links (`bin`), dependency declarations, and installation lifecycle scripts affect package fingerprints. Ordinary test-script edits do not.
+
 Acre does not claim two workspaces are compatible merely because they use the same branch family or package manager.
 
 ## States
@@ -28,7 +30,7 @@ For Node projects, `node_modules` is normally required. Rust’s `target` direct
 
 | Ecosystem | Fingerprint files | Cache roots | Required roots |
 |---|---|---|---|
-| pnpm | `package.json`, `pnpm-lock.yaml` | `node_modules` | `node_modules` |
+| pnpm | `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml` | `node_modules` | `node_modules` |
 | Yarn | `package.json`, `yarn.lock`, `.yarnrc.yml` | `node_modules`, `.yarn/cache`, `.yarn/unplugged` | `node_modules` |
 | npm | `package.json`, `package-lock.json`, `npm-shrinkwrap.json` | `node_modules` | `node_modules` |
 | Bun | `package.json`, `bun.lock`, `bun.lockb` | `node_modules` | `node_modules` |
@@ -49,7 +51,7 @@ Acre prefers whole-slot reuse. When a second compatible workspace needs the same
 1. a filesystem clone using `cp -cR` on macOS or `cp -a --reflink=always` on Linux;
 2. a normal recursive copy when cloning is unavailable.
 
-Copies are staged in a temporary directory and published only after completion. Before copying, Acre checks the source checkout's current commit and refuses sources with staged, unstaged, or untracked fingerprint files. Ordinary source-code edits do not prevent cache sharing.
+Copies are staged in a temporary directory and published only after completion. Before copying and again before publication, Acre checks the source checkout's current commit and refuses sources with staged, unstaged, or untracked fingerprint files. Ordinary source-code edits do not prevent cache sharing.
 
 The reported mode is honest. Acre does not label a full copy as a reflink.
 
@@ -65,6 +67,8 @@ They are:
 - always removed from idle pool slots;
 - never copied into cross-repository pull requests;
 - never retained in an untrusted workspace generation.
+
+Paths are normalized by component, including repeated separators and `.` components, before checking seed boundaries. Seed paths and cache roots must not overlap; Acre rejects conflicting configuration before copying. Expanded cache paths inside directory seeds are withheld from copying and slot reuse, including caches already present in older slots. Ignored files beside a nested seed are checked individually.
 
 A directory may be configured as a seed path. Acre hashes its contents recursively and refuses `done` when any part changes.
 

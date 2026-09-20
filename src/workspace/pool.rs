@@ -2,11 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::environment::clone::clone_environment;
+use crate::environment::clone::prepare_environment;
 use crate::environment::definitions::ALL_FINGERPRINT_FILES;
 use crate::environment::fingerprint::{EnvironmentPlan, build_environment_plan};
 use crate::environment::inspect::inspect_environment;
-use crate::environment::roots::inspect_ignored;
+use crate::environment::roots::{inspect_ignored, overlaps_seed};
 use crate::error::Result;
 use crate::git::operations::create_detached_worktree;
 use crate::git::refs::resolve_oid;
@@ -17,7 +17,8 @@ use crate::model::{
     WorkspaceStatus,
 };
 use crate::state::index::remember_repository;
-use crate::state::paths::active_root;
+use crate::state::lock::RepositoryLock;
+use crate::state::paths::{active_root, repository_root};
 use crate::state::repository::LockedRepository;
 use crate::util::{ensure_directory, is_inside, now_iso, random_short};
 use crate::workspace::process::find_processes_using_path;
@@ -28,20 +29,68 @@ pub fn warm_repository(
     repository: &Repository,
     requested_slots: Option<usize>,
 ) -> Result<Vec<WorkspaceSlot>> {
-    let mut locked = LockedRepository::open(config, repository)?;
-    let repository = locked.repository.clone();
-    let oid = warm_base_oid(&repository)?;
-    let plan = build_environment_plan(&repository, &oid, config)?;
+    // Serialize replenishers separately; cache copying must not lock out foreground commands.
+    let _warming = RepositoryLock::try_acquire(&repository_root(config, repository).join("warm.lock"))?;
     // Never warm past max_slots, or gc would immediately evict what we just built.
     let requested = requested_slots
         .unwrap_or(config.pool.min_slots)
         .min(config.pool.max_slots);
     let mut created = Vec::new();
-    while idle_slot_count(&locked.state) < requested {
-        created.push(create_slot(config, &repository, &mut locked.state, &oid, &plan)?);
+    for _ in 0..requested {
+        let mut locked = LockedRepository::open(config, repository)?;
+        if idle_slot_count(&locked.state) >= requested {
+            break;
+        }
+        let repository = locked.repository.clone();
+        let oid = warm_base_oid(&repository)?;
+        let plan = build_environment_plan(&repository, &oid, config)?;
+        let mut slot = create_empty_slot(config, &repository, &oid, &plan)?;
+        // A crash leaves a retained checkout, never a partially prepared idle slot.
+        slot.status = WorkspaceStatus::Retained;
+        locked.state.slots.push(slot.clone());
+        locked.save(config)?;
+        let state = locked.state.clone();
+        drop(locked);
+
+        let prepared =
+            find_environment_source(config, &repository, &state, &plan, &slot.path).and_then(|source| {
+                prepare_environment(&source, &slot.path, &plan)
+                    .ok()
+                    .map(|copy| (source, copy))
+            });
+
+        let mut locked = LockedRepository::open(config, &repository)?;
+        let Some(index) =
+            locked.state.slots.iter().position(|candidate| {
+                candidate.id == slot.id && candidate.status == WorkspaceStatus::Retained
+            })
+        else {
+            continue;
+        };
+        // An explicit open may adopt the retained checkout while we copy. Manual edits and
+        // newly installed caches also belong to the user; discard our private copy in that case.
+        slot.status = WorkspaceStatus::Idle;
+        if locked.state.workspace_at(&slot.path).is_some()
+            || !idle_slot_is_safe(config, &locked.repository, &slot)
+            || !inspect_environment(&slot.path, &plan)?.present_roots.is_empty()
+        {
+            continue;
+        }
+        slot.environment = Some(
+            match prepared
+                .filter(|(source, _)| source_matches_plan(config, &locked.repository, source, &plan))
+                .and_then(|(_, prepared)| prepared.publish(&slot.path, &plan).ok())
+            {
+                Some(environment) => environment,
+                None => inspect_environment(&slot.path, &plan)?,
+            },
+        );
+        slot.last_used_at = now_iso();
+        locked.state.slots[index] = slot.clone();
+        locked.save(config)?;
+        created.push(slot);
     }
-    locked.save(config)?;
-    let _ = remember_repository(config, &repository);
+    let _ = remember_repository(config, repository);
     Ok(created)
 }
 
@@ -79,7 +128,7 @@ pub fn select_slot(
     state: &mut RepositoryState,
     plan: &EnvironmentPlan,
     oid: &str,
-) -> Result<WorkspaceSlot> {
+) -> Result<(WorkspaceSlot, bool)> {
     let mut candidates: Vec<&WorkspaceSlot> = state
         .slots
         .iter()
@@ -104,18 +153,25 @@ pub fn select_slot(
     // preserving every check for the selected slot and falling through when one is unsafe.
     let chosen = candidates
         .into_iter()
-        .find(|slot| idle_slot_is_safe(config, repository, slot))
+        .find(|slot| {
+            idle_slot_is_safe(config, repository, slot)
+                && inspect_ignored(&slot.path, &plan.cache_roots).is_ok_and(|layout| {
+                    layout
+                        .cache_roots
+                        .iter()
+                        .all(|root| !overlaps_seed(root, &plan.seed_files))
+                })
+        })
         .cloned();
     match chosen {
-        Some(slot) => Ok(slot),
-        None => create_slot(config, repository, state, oid, plan),
+        Some(slot) => Ok((slot, true)),
+        None => Ok((create_empty_slot(config, repository, oid, plan)?, false)),
     }
 }
 
-fn create_slot(
+fn create_empty_slot(
     config: &AcreConfig,
     repository: &Repository,
-    state: &mut RepositoryState,
     oid: &str,
     plan: &EnvironmentPlan,
 ) -> Result<WorkspaceSlot> {
@@ -124,15 +180,9 @@ fn create_slot(
     let slot_path = active_root(config, repository).join(&id);
     // Detached from the start: a slot must never hold a branch that `git branch -d` would refuse to delete.
     create_detached_worktree(repository, &slot_path, oid)?;
-    let mut environment = inspect_environment(&slot_path, plan)?;
-    if let Some(source) = find_environment_source(config, repository, state, plan, &slot_path) {
-        // Cloning is a bonus; a slot without caches is still a usable slot.
-        if let Ok(snapshot) = clone_environment(&source, &slot_path, plan) {
-            environment = snapshot;
-        }
-    }
+    let environment = inspect_environment(&slot_path, plan)?;
     let timestamp = now_iso();
-    let slot = WorkspaceSlot {
+    Ok(WorkspaceSlot {
         id,
         path: slot_path,
         head: Some(oid.to_owned()),
@@ -140,9 +190,7 @@ fn create_slot(
         environment: Some(environment),
         created_at: timestamp.clone(),
         last_used_at: timestamp,
-    };
-    state.slots.push(slot.clone());
-    Ok(slot)
+    })
 }
 
 /// A worktree whose prepared caches match `plan`: a trusted workspace or slot first, then the
@@ -176,30 +224,40 @@ pub fn find_environment_source(
         .map(PathBuf::as_path)
         .chain(std::iter::once(repository.primary_path()));
     for source in candidates {
-        let Some(worktree) = repository.worktree_at(source).filter(|worktree| worktree.exists) else {
+        let Some(_) = repository.worktree_at(source).filter(|worktree| worktree.exists) else {
             continue;
         };
         if source == excluded_path {
             continue;
         }
-        // A recorded fingerprint cannot describe dependencies changed since activation, whether
-        // committed or still local. Ordinary source edits do not prevent cache sharing.
-        let manifests_unchanged = read_status(source).is_ok_and(|status| {
-            status
-                .entries
-                .iter()
-                .flat_map(|entry| std::iter::once(&entry.path).chain(entry.original_path.iter()))
-                .all(|path| !ALL_FINGERPRINT_FILES.contains(&path.rsplit('/').next().unwrap_or_default()))
-        });
-        if manifests_unchanged
-            && build_environment_plan(repository, &worktree.head, config)
-                .is_ok_and(|source_plan| source_plan.fingerprint == plan.fingerprint)
+        if source_matches_plan(config, repository, source, plan)
             && inspect_environment(source, plan).is_ok_and(|snapshot| !snapshot.present_roots.is_empty())
         {
             return Some(source.to_path_buf());
         }
     }
     None
+}
+
+/// Read the source again after copying as well as before; its recorded HEAD may be stale.
+pub fn source_matches_plan(
+    config: &AcreConfig,
+    repository: &Repository,
+    source: &Path,
+    plan: &EnvironmentPlan,
+) -> bool {
+    let manifests_unchanged = read_status(source).is_ok_and(|status| {
+        status
+            .entries
+            .iter()
+            .flat_map(|entry| std::iter::once(&entry.path).chain(entry.original_path.iter()))
+            .all(|path| !ALL_FINGERPRINT_FILES.contains(&path.rsplit('/').next().unwrap_or_default()))
+    });
+    manifests_unchanged
+        && resolve_oid(source, "HEAD").ok().flatten().is_some_and(|oid| {
+            build_environment_plan(repository, &oid, config)
+                .is_ok_and(|source_plan| source_plan.fingerprint == plan.fingerprint)
+        })
 }
 
 /// Idle metadata alone is not permission to reset or delete a checkout someone has edited.
@@ -219,5 +277,6 @@ pub fn idle_slot_is_safe(config: &AcreConfig, repository: &Repository, slot: &Wo
         && read_status(&slot.path).is_ok_and(|status| !status.dirty)
         && in_progress_operation(&slot.path).is_ok_and(|operation| operation.is_none())
         && !std::env::current_dir().is_ok_and(|cwd| is_inside(&slot.path, &cwd))
-        && (!config.safety.detect_processes || find_processes_using_path(&slot.path, &[]).is_empty())
+        && (!config.safety.detect_processes
+            || find_processes_using_path(&slot.path, &[]).is_ok_and(|processes| processes.is_empty()))
 }

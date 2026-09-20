@@ -64,6 +64,59 @@ pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<Ignore
     })
 }
 
+/// Expand unknown directories so additions beside a seed cannot hide behind a collapsed entry.
+pub fn unknown_ignored_files(worktree: &Path, cache_roots: &[String]) -> Result<Vec<String>> {
+    let layout = inspect_ignored(worktree, cache_roots)?;
+    let mut files = BTreeSet::new();
+    for entry in layout.unknown {
+        collect_unknown(
+            worktree,
+            entry.trim_end_matches('/'),
+            &layout.cache_roots,
+            &mut files,
+        )?;
+    }
+    Ok(files.into_iter().collect())
+}
+
+/// Compare expanded cache paths, since a cache pattern can occur inside a directory seed.
+pub fn overlaps_seed(cache_path: &str, seed_files: &[String]) -> bool {
+    let cache = Path::new(cache_path);
+    seed_files.iter().any(|seed| {
+        let seed = Path::new(seed);
+        cache.starts_with(seed) || seed.starts_with(cache)
+    })
+}
+
+fn collect_unknown(
+    worktree: &Path,
+    relative: &str,
+    caches: &[String],
+    files: &mut BTreeSet<String>,
+) -> Result<()> {
+    if caches
+        .iter()
+        .any(|cache| relative == cache || relative.starts_with(&format!("{cache}/")))
+    {
+        return Ok(());
+    }
+    let path = worktree.join(relative);
+    if fs::symlink_metadata(&path)?.is_dir() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            collect_unknown(
+                worktree,
+                &format!("{relative}/{}", entry.file_name().to_string_lossy()),
+                caches,
+                files,
+            )?;
+        }
+    } else {
+        files.insert(relative.to_owned());
+    }
+    Ok(())
+}
+
 fn safe_cache_directory(worktree: &Path, relative: &str) -> Result<bool> {
     Ok(!has_symlink_parent(worktree, Path::new(relative))?
         && fs::symlink_metadata(worktree.join(relative)).is_ok_and(|metadata| metadata.is_dir()))

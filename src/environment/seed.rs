@@ -24,13 +24,20 @@ pub fn seed_files_only(
     for relative in files {
         let source = source_root.join(relative);
         let destination = destination_root.join(relative);
+        // The destination does not exist yet. A trailing slash lets Git apply
+        // directory-only ignore rules such as `local/` to directory seeds there.
+        let ignored_path = if source.symlink_metadata().is_ok_and(|metadata| metadata.is_dir()) {
+            format!("{relative}/")
+        } else {
+            relative.clone()
+        };
         // Never overwrite what the checkout already has, and never copy a tracked file as a "seed".
         if has_symlink_parent(source_root, Path::new(relative))?
             || has_symlink_parent(destination_root, Path::new(relative))?
             || !source.try_exists()?
             || destination.symlink_metadata().is_ok()
-            || !is_ignored_path(source_root, relative)?
-            || !is_ignored_path(destination_root, relative)?
+            || !is_ignored_path(source_root, &ignored_path)?
+            || !is_ignored_path(destination_root, &ignored_path)?
         {
             continue;
         }

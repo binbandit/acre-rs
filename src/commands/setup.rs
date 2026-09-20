@@ -21,9 +21,16 @@ pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -
     let rc = shell_config_path(shell);
     // Markers let a later run replace the block in place instead of appending a second copy.
     let desired = format!("{START}\n{}\n{END}", shell_snippet(shell));
-    let current = fs::read_to_string(&rc).unwrap_or_default();
+    let current = read_startup_file(&rc)?;
     let next = install_block(&current, &desired);
     let changed = next != current;
+    let login = (shell == SupportedShell::Bash).then(bash_login_path);
+    // Read every destination before changing any file.
+    let login_contents = login.as_ref().map(|path| read_startup_file(path)).transpose()?;
+    let login_next = login_contents
+        .as_ref()
+        .map(|current| install_block(current, &desired));
+    let changed = changed || login_next != login_contents;
     let approved = if changed {
         // Nobody to ask when piped; proceed rather than hang.
         yes || !context.interactive
@@ -46,6 +53,13 @@ pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -
         fs::write(&rc, next)
             .map_err(|error| AcreError::io(format!("could not write {}", rc.display()), error))?;
     }
+    if approved {
+        if let (Some(path), Some(next)) = (&login, login_next) {
+            if login_contents.as_ref() != Some(&next) {
+                fs::write(path, next)?;
+            }
+        }
+    }
     ensure_default_config_file()?;
     let config = load_config()?;
     if context.global.json {
@@ -54,6 +68,7 @@ pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -
             "shell": shell,
             "shell_file": rc,
             "shell_changed": changed && approved,
+            "login_shell_file": login,
             "acre_config": config_path(),
             "root": config.root,
         }));
@@ -117,8 +132,27 @@ fn shell_config_path(shell: SupportedShell) -> PathBuf {
         SupportedShell::Powershell => {
             home_dir().join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1")
         }
-        SupportedShell::Zsh => home_dir().join(".zshrc"),
+        SupportedShell::Zsh => std::env::var_os("ZDOTDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(home_dir)
+            .join(".zshrc"),
     }
+}
+
+fn read_startup_file(path: &std::path::Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(AcreError::io(format!("could not read {}", path.display()), error)),
+    }
+}
+
+fn bash_login_path() -> PathBuf {
+    [".bash_profile", ".bash_login", ".profile"]
+        .iter()
+        .map(|name| home_dir().join(name))
+        .find(|path| path.exists())
+        .unwrap_or_else(|| home_dir().join(".bash_profile"))
 }
 
 fn shell_snippet(shell: SupportedShell) -> &'static str {

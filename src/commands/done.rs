@@ -9,7 +9,7 @@ use crate::git::repository::{Repository, discover_repository, discover_repositor
 use crate::git::status::read_status;
 use crate::model::{PendingDoneOperation, WorkspaceOwnership, WorkspaceRecord};
 use crate::shell::directive::write_resume_directive;
-use crate::shell::navigation::navigate_direct;
+use crate::shell::navigation::{navigate_direct, record_shell_move};
 use crate::state::config::load_config;
 use crate::state::operations::{read_pending_done, remove_pending_operation, save_pending_done};
 use crate::state::repository::load_repository_state;
@@ -25,6 +25,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let state = load_repository_state(&config, &repository)?;
+    let shell_directory = std::env::current_dir()?;
     let current_path = repository
         .current_worktree
         .as_ref()
@@ -73,10 +74,8 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         .with_details(serde_json::json!({ "path": target_path })));
     }
     // "Current" means the shell itself would be pulled out from under us; that path needs the resume dance.
-    let is_current = current_path
-        .as_ref()
-        .is_some_and(|current| canonical_or_absolute(current) == canonical_or_absolute(&target_path))
-        && is_inside(&target_path, &context.cwd);
+    // -C changes target lookup, not the directory occupied by the calling shell.
+    let is_current = is_inside(&target_path, &shell_directory);
 
     if workspace
         .as_ref()
@@ -101,7 +100,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
             ));
             return Ok(exit::SUCCESS);
         }
-        let destination = safe_destination(context, &config, &repository, &target_path)?;
+        let destination = safe_destination(context, &config, &repository, &target_path, &shell_directory)?;
         // Drop our own lease before leaving, or the worktree looks in use forever.
         if let Some(session_id) = &context.shell.session_id {
             let _ = release_shell_session_lease(&config, &repository, session_id);
@@ -141,6 +140,13 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         return Ok(exit::SUCCESS);
     }
 
+    if context.global.json {
+        return Err(AcreError::new(
+            "ACRE_SHELL_MOVE_REQUIRED",
+            "Run done from outside this workspace in JSON mode.",
+            exit::REFUSED,
+        ));
+    }
     // The shell sits inside this workspace, so prove the return safe before moving it.
     let assessment = assess_workspace_for_return(&config, &repository, &workspace.id, &assess)?;
     if !assessment.safe {
@@ -155,7 +161,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         )
         .with_details(serde_json::json!({ "hint": "acre setup", "workspace": workspace.path })));
     }
-    let destination = safe_destination(context, &config, &repository, &workspace.path)?;
+    let destination = safe_destination(context, &config, &repository, &workspace.path, &shell_directory)?;
     let registered = repository.worktree_at(&workspace.path).ok_or_else(|| {
         AcreError::new(
             "ACRE_WORKTREE_MISSING",
@@ -176,6 +182,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
             expected_head: registered.head.clone(),
             expected_status_fingerprint: assessment.status.fingerprint,
             safe_destination: destination.clone(),
+            original_directory: Some(shell_directory),
             current_session_id: context.shell.session_id.clone(),
             created_at: now_iso(),
         },
@@ -215,13 +222,21 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
                 exit::CONFLICT,
             )
         })?;
-    if is_inside(&workspace.path, &context.cwd) || is_inside(&workspace.path, &std::env::current_dir()?) {
+    let shell_directory = std::env::current_dir()?;
+    if is_inside(&workspace.path, &context.cwd) || is_inside(&workspace.path, &shell_directory) {
         return Err(AcreError::new(
             "ACRE_SHELL_STILL_INSIDE",
             "Move the shell out of the workspace before resuming this operation.",
             exit::REFUSED,
         ));
     }
+    record_shell_move(
+        context,
+        &config,
+        operation.original_directory.as_deref().unwrap_or(&workspace.path),
+        &shell_directory,
+        false,
+    )?;
     let registered = repository.worktree_at(&workspace.path);
     let status = read_status(&workspace.path)?;
     // Anything that happened between the two phases voids the earlier assessment.
@@ -262,6 +277,7 @@ fn safe_destination(
     config: &AcreConfig,
     repository: &Repository,
     leaving_path: &Path,
+    shell_directory: &Path,
 ) -> Result<PathBuf> {
     if let Some(session_id) = &context.shell.session_id {
         if let Some(previous) =
@@ -291,8 +307,7 @@ fn safe_destination(
             )
         })?;
     // Keep the relative position: leaving src/api lands in the primary's src/api when it exists.
-    let candidate = context
-        .cwd
+    let candidate = shell_directory
         .strip_prefix(leaving_path)
         .ok()
         .filter(|relative| !relative.as_os_str().is_empty())
@@ -341,6 +356,9 @@ fn render_unsafe(context: &CommandContext, assessment: &DoneAssessment) {
     }
     render_entries(&renderer, "ignored", &assessment.new_ignored);
     render_entries(&renderer, "changed local file", &assessment.changed_seed_files);
+    if let Some(error) = &assessment.process_check_error {
+        renderer.line(format!("  process check failed: {}", renderer.value(error)));
+    }
     for lease in &assessment.leases {
         renderer.line(format!("  held by {}", renderer.value(&lease.holder)));
     }

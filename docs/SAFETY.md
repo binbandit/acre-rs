@@ -16,7 +16,7 @@ Workspace preparation never runs package installation, build commands, checkout 
 
 ## Return assessment
 
-Acre performs the assessment before mutation and, for the current shell, again after the shell has moved. Failure retains the workspace.
+Acre performs the assessment before mutation and, for the current shell, again after the shell has moved. Failure retains the workspace. The shell's actual directory determines whether it must move first, even when `-C` selects another directory.
 
 Tracked and untracked status comes from Git porcelain v2. Ignored state is listed separately with approved cache roots excluded. Unknown ignored data is blocked by default.
 
@@ -32,6 +32,13 @@ Cross-repository PRs are untrusted. No seed file is copied. Approved cache roots
 
 Repository state and the shared repository index use OS-backed exclusive file locks. The OS releases locks when a process exits, including crashes. Lock files remain on disk so concurrent processes always lock the same file. Do not run older versions using directory locks concurrently with this version.
 
+Replenishment reserves a retained worktree under the repository lock, then copies caches to
+private temporary directories without holding that lock. A separate warming lock prevents
+duplicate replenishers. Before publishing caches and making the slot idle, Acre reloads state
+and checks that the checkout is still untouched and unclaimed. An explicit open or manual edit
+preserves the checkout and discards the prepared copy. An interrupted preparation leaves a
+retained checkout, never an idle slot that could be recycled with incomplete caches.
+
 ## Recovery bias
 
 When metadata is uncertain:
@@ -45,3 +52,7 @@ When metadata is uncertain:
 Pool reuse, eviction, and garbage collection require an unlocked, detached, clean slot with known cache metadata, an unchanged recorded commit, no unknown ignored data, and no detected processes using the slot. Workspaces stay at their installation paths; opening an idle slot by path takes it out of the pool.
 
 Activation removes a slot from the persisted pool before changing files. If activation or its final state write fails, recovery retains the directory without trusting the old cache fingerprint. Legacy idle slots without a recorded commit remain unverified; explicitly reopen them, attach a branch if detached, and return them to establish a safe baseline.
+
+Process-inspection errors on macOS and Linux retain workspaces and disqualify idle slots from reuse. A failed PID probe does not expire a lease. Windows has no working-directory process scanner; its lease checks still apply.
+
+Repair removes missing Acre-owned worktree registrations individually. It never runs repository-wide pruning against external registrations. Active bisect sessions block return just like merges and rebases. Activation rollback only deletes a branch after that activation successfully created it.

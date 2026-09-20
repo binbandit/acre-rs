@@ -11,7 +11,13 @@ use crate::ui::output::Renderer;
 use crate::workspace::pool::warm_repository;
 
 pub fn session_id(context: &CommandContext) -> Result<i32> {
-    Renderer::new(context).raw(format!("{}\n", new_shell_session_id()));
+    let id = new_shell_session_id();
+    let renderer = Renderer::new(context);
+    if context.global.json {
+        renderer.json(&serde_json::json!({"ok": true, "session_id": id}));
+    } else {
+        renderer.raw(format!("{id}\n"));
+    }
     Ok(exit::SUCCESS)
 }
 
@@ -19,7 +25,7 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
     done::resume(context, token)
 }
 
-pub fn replenish(common_dir: &std::path::Path) -> Result<i32> {
+pub fn replenish(context: &CommandContext, common_dir: &std::path::Path) -> Result<i32> {
     let result = (|| -> Result<()> {
         let config = load_config()?;
         let repository = discover_repository_from_common_dir(common_dir)?;
@@ -30,7 +36,11 @@ pub fn replenish(common_dir: &std::path::Path) -> Result<i32> {
     if std::env::var_os("ACRE_BACKGROUND").is_some() {
         return Ok(exit::SUCCESS);
     }
-    result.map(|()| exit::SUCCESS)
+    result?;
+    if context.global.json {
+        Renderer::new(context).json(&serde_json::json!({"ok": true}));
+    }
+    Ok(exit::SUCCESS)
 }
 
 pub fn complete(context: &CommandContext, token: &str) -> Result<i32> {
@@ -55,8 +65,12 @@ pub fn complete(context: &CommandContext, token: &str) -> Result<i32> {
     let output = values
         .into_iter()
         .filter(|value| token.is_empty() || value.to_ascii_lowercase().starts_with(&lower))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Renderer::new(context).raw(format!("{output}\n"));
+        .collect::<Vec<_>>();
+    let renderer = Renderer::new(context);
+    if context.global.json {
+        renderer.json(&serde_json::json!({"ok": true, "candidates": output}));
+    } else {
+        renderer.raw(format!("{}\n", output.join("\n")));
+    }
     Ok(exit::SUCCESS)
 }

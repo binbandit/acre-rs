@@ -16,12 +16,17 @@ use crate::state::shell::read_shell_state;
 use crate::ui::output::Renderer;
 use crate::ui::picker::{PickerResult, PickerRow, pick};
 use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
-use crate::workspace::lease::{
-    LeaseRequest, lease_workspace_by_path, release_shell_session_lease, release_workspace_lease,
-};
+use crate::workspace::lease::{LeaseRequest, release_workspace_lease};
 use crate::workspace::resolve::resolve_existing_target;
 
 pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsString]) -> Result<i32> {
+    if context.global.json && !child_argv.is_empty() {
+        return Err(AcreError::new(
+            "ACRE_JSON_CHILD_COMMAND",
+            "Run child commands without --json so their terminal output can pass through unchanged.",
+            exit::USAGE,
+        ));
+    }
     let config = load_config()?;
     if selector == Some("-") {
         if !child_argv.is_empty() {
@@ -48,22 +53,11 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
                     exit::NOT_FOUND,
                 )
             })?;
-        // Best effort on both sides: `-` should still move the shell if lease bookkeeping fails.
-        let previous_repository = discover_repository(&previous).ok();
-        let request = LeaseRequest::for_shell(&context.shell);
-        if let Ok(current_repository) = discover_repository(&context.cwd) {
-            // Within one repository, acquiring the destination also releases the old lease.
-            // Keep that move in one transaction instead of loading and saving state twice.
-            if request.is_none()
-                || previous_repository
-                    .as_ref()
-                    .is_none_or(|previous| previous.common_dir != current_repository.common_dir)
-            {
-                let _ = release_shell_session_lease(&config, &current_repository, session_id);
-            }
-        }
-        if let (Some(previous_repository), Some(request)) = (previous_repository, request) {
-            let _ = lease_workspace_by_path(&config, &previous_repository, &previous, &request);
+        if context.global.json {
+            Renderer::new(context).json(
+                &serde_json::json!({"ok": true, "action": "previous", "path": previous, "navigated": false}),
+            );
+            return Ok(exit::SUCCESS);
         }
         let label = previous
             .file_name()

@@ -206,8 +206,16 @@ pub fn remove_path(path: &Path) -> Result<()> {
 pub fn unique_paths(values: impl IntoIterator<Item = String>) -> Vec<String> {
     values
         .into_iter()
-        // Normalise so `./node_modules/` and `node_modules` are one root.
-        .map(|value| value.trim_start_matches("./").trim_end_matches('/').to_owned())
+        // Inputs are validated relative paths. Normalize components rather than stripping
+        // a string prefix, which could turn `.//local` into the absolute path `/local`.
+        .map(|value| {
+            Path::new(&value)
+                .components()
+                .filter(|component| *component != Component::CurDir)
+                .map(|component| component.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>()
         .into_iter()

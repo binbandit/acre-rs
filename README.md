@@ -39,7 +39,7 @@ An unknown target is never silently turned into a new branch.
 ## Requirements
 
 - Rust 1.85 or newer
-- Git 2.31 or newer
+- Git 2.36 or newer
 - `gh` only for `pr:<number>` and GitHub pull-request URLs
 
 ## Build and install

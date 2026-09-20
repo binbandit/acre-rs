@@ -143,27 +143,19 @@ pub fn parse_status(buffer: &[u8]) -> WorkingTreeStatus {
 }
 
 pub fn in_progress_operation(cwd: &Path) -> Result<Option<String>> {
-    let result = run_git(
-        cwd,
-        &[
-            "rev-parse",
-            "--git-path",
-            "MERGE_HEAD",
-            "--git-path",
-            "rebase-merge",
-            "--git-path",
-            "rebase-apply",
-            "--git-path",
-            "CHERRY_PICK_HEAD",
-            "--git-path",
-            "REVERT_HEAD",
-        ],
-    )?;
-    // Same order as the --git-path arguments above; a rebase has two marker directories.
-    let names = ["merge", "rebase", "rebase", "cherry-pick", "revert"];
-    for (path, name) in String::from_utf8_lossy(&result.stdout).lines().zip(names) {
-        // rev-parse prints the paths whether or not they exist; presence is the signal.
-        if Path::new(path).exists() {
+    let result = run_git(cwd, &["rev-parse", "--absolute-git-dir"])?;
+    let bytes = result.stdout.strip_suffix(b"\n").unwrap_or(&result.stdout);
+    let git_dir = std::path::PathBuf::from(String::from_utf8_lossy(bytes).into_owned());
+    for (marker, name) in [
+        ("MERGE_HEAD", "merge"),
+        ("rebase-merge", "rebase"),
+        ("rebase-apply", "rebase"),
+        ("CHERRY_PICK_HEAD", "cherry-pick"),
+        ("REVERT_HEAD", "revert"),
+        ("BISECT_START", "bisect"),
+        ("sequencer", "sequencer"),
+    ] {
+        if git_dir.join(marker).try_exists()? {
             return Ok(Some(name.to_owned()));
         }
     }

@@ -1,7 +1,7 @@
 //! Decides whether a workspace can be returned: nothing unsaved, nothing unknown, nobody using it.
 
 use crate::environment::fingerprint::build_environment_plan;
-use crate::environment::roots::inspect_ignored;
+use crate::environment::roots::unknown_ignored_files;
 use crate::environment::seed::changed_seed_files;
 use crate::error::Result;
 use crate::git::repository::{Repository, discover_repository};
@@ -25,6 +25,7 @@ pub struct DoneAssessment {
     pub changed_seed_files: Vec<String>,
     pub leases: Vec<WorkspaceLease>,
     pub processes: Vec<ProcessUse>,
+    pub process_check_error: Option<String>,
     pub safe: bool,
     pub reasons: Vec<String>,
 }
@@ -70,13 +71,14 @@ pub fn assess_workspace(
             build_environment_plan(repository, reference, config)?.cache_roots
         }
     };
-    let ignored = inspect_ignored(&workspace.path, &cache_roots)?.unknown;
+    let ignored = unknown_ignored_files(&workspace.path, &cache_roots)?;
     let baseline: std::collections::BTreeSet<&str> =
         workspace.baseline_ignored.iter().map(String::as_str).collect();
     let new_ignored = ignored
         .into_iter()
         // Ignored data that was there at activation is ours; only new arrivals are unknown.
-        .filter(|entry| !baseline.contains(entry.as_str()))
+        .filter(|entry| !baseline.contains(entry.as_str()) && !workspace.baseline_seed_files.iter().any(|seed|
+            entry == &seed.path || entry.starts_with(&format!("{}/", seed.path))))
         .collect::<Vec<_>>();
     // An edited .env means the user put something there that no other copy has.
     let changed_seed_files = changed_seed_files(&workspace.path, &workspace.baseline_seed_files)?;
@@ -94,10 +96,13 @@ pub fn assess_workspace(
         .cloned()
         .collect::<Vec<_>>();
     // Opt-out only: a shell or editor sitting in the directory is the commonest reason a return goes wrong.
-    let processes = if config.safety.detect_processes {
-        find_processes_using_path(&workspace.path, &options.ignored_pids)
+    let (processes, process_check_error) = if config.safety.detect_processes {
+        match find_processes_using_path(&workspace.path, &options.ignored_pids) {
+            Ok(processes) => (processes, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        }
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
     let locked = registered.is_some_and(|worktree| worktree.locked);
     let slot_head = workspace
@@ -117,6 +122,9 @@ pub fn assess_workspace(
         .and_then(|worktree| worktree.lock_reason.clone());
     // Every reason is reported, not just the first, so the user fixes them all in one go.
     let mut reasons = Vec::new();
+    if let Some(error) = &process_check_error {
+        reasons.push(format!("could not verify process use: {error}"));
+    }
     if detached_commits {
         reasons.push("create a branch for detached commits before returning this workspace".to_owned());
     }
@@ -155,6 +163,7 @@ pub fn assess_workspace(
         changed_seed_files,
         leases,
         processes,
+        process_check_error,
         safe: reasons.is_empty(),
         reasons,
     })

@@ -14,6 +14,7 @@ pub struct EcosystemDefinition {
 pub const ALL_FINGERPRINT_FILES: &[&str] = &[
     "package.json",
     "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
     "yarn.lock",
     ".yarnrc.yml",
     "package-lock.json",
@@ -97,6 +98,24 @@ const GO: EcosystemDefinition = EcosystemDefinition {
 };
 
 pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefinition> {
+    let mut directories: BTreeMap<&str, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
+    for (path, content) in files {
+        let (directory, name) = path.rsplit_once('/').unwrap_or(("", path));
+        directories
+            .entry(directory)
+            .or_default()
+            .insert(name.to_owned(), content.clone());
+    }
+    let mut result = BTreeMap::new();
+    for directory in directories.values() {
+        for ecosystem in detect_directory_ecosystems(directory) {
+            result.insert(ecosystem.id, ecosystem);
+        }
+    }
+    result.into_values().collect()
+}
+
+fn detect_directory_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefinition> {
     let mut result = Vec::new();
     let package_json = files
         .get("package.json")
@@ -117,7 +136,7 @@ pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefi
         .any(|section| package_json[section].get(name).is_some())
     };
 
-    // One package manager per repo: lockfile first, then the packageManager field, npm as the fallback.
+    // One package manager per project directory: lockfile, then packageManager, then npm.
     if files.contains_key("pnpm-lock.yaml") || package_manager == "pnpm" {
         result.push(PNPM);
     } else if files.contains_key("yarn.lock") || package_manager == "yarn" {

@@ -21,7 +21,6 @@ struct GhPullRequest {
     head_ref_name: String,
     head_ref_oid: String,
     is_cross_repository: Option<bool>,
-    head_repository: Option<GhRepository>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,42 +29,66 @@ struct GhAuthor {
     name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhRepository {
-    name_with_owner: Option<String>,
-}
-
 pub fn parse_pull_request_selector(selector: &str) -> Option<u64> {
     let lower = selector.to_ascii_lowercase();
     if let Some(value) = lower.strip_prefix("pr:") {
         return value.parse().ok();
     }
-    // Any GitHub PR URL form, including trailing /files or /commits.
-    let marker = "/pull/";
-    let index = lower.find(marker)? + marker.len();
-    lower[index..]
-        .split('/')
-        .next()
-        .and_then(|value| value.parse().ok())
+    let (_, path) = selector
+        .strip_prefix("https://")
+        .or_else(|| selector.strip_prefix("http://"))?
+        .split_once('/')?;
+    let mut parts = path.split('/');
+    parts.next()?;
+    parts.next()?;
+    if parts.next()? != "pull" {
+        return None;
+    }
+    parts.next()?.split(['?', '#']).next()?.parse().ok()
 }
 
-pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<PullRequestTarget> {
+pub fn pull_request_repository(repository: &Repository) -> Result<String> {
     let hosted = repository
         .remote_url
         .as_deref()
         .and_then(parse_hosted_remote)
-        // GitHub Enterprise hosts qualify too; gh handles them.
-        .filter(|remote| remote.host.to_ascii_lowercase().contains("github"))
         .ok_or_else(|| {
             AcreError::new(
                 "ACRE_PR_PROVIDER_UNSUPPORTED",
-                "Pull request targets currently require a GitHub remote.",
+                "Pull request targets require a hosted GitHub remote.",
                 exit::ENVIRONMENT,
             )
-            .with_details(serde_json::json!({ "remoteUrl": repository.remote_url }))
         })?;
-    let repo_slug = format!("{}/{}", hosted.owner, hosted.repo);
+    Ok(if hosted.host.eq_ignore_ascii_case("github.com") {
+        format!("{}/{}", hosted.owner, hosted.repo)
+    } else {
+        format!("{}/{}/{}", hosted.host, hosted.owner, hosted.repo)
+    })
+}
+
+pub fn validate_pull_request_url(repository: &Repository, selector: &str) -> Result<()> {
+    if selector.starts_with("http://") || selector.starts_with("https://") {
+        // Either the owner or repository can itself be named "pull".
+        let prefix = selector.split('/').take(5).collect::<Vec<_>>().join("/");
+        let requested = parse_hosted_remote(&prefix);
+        let current = repository.remote_url.as_deref().and_then(parse_hosted_remote);
+        if !requested.zip(current).is_some_and(|(requested, current)| {
+            requested.host.eq_ignore_ascii_case(&current.host)
+                && requested.owner.eq_ignore_ascii_case(&current.owner)
+                && requested.repo.eq_ignore_ascii_case(&current.repo)
+        }) {
+            return Err(AcreError::new(
+                "ACRE_PR_REPOSITORY_MISMATCH",
+                "This pull request URL belongs to a different repository or host.",
+                exit::USAGE,
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<PullRequestTarget> {
+    let repo_slug = pull_request_repository(repository)?;
     let result = run_process(
         "gh",
         &[
@@ -102,10 +125,7 @@ pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<P
         base_ref_name: parsed.base_ref_name,
         head_ref_name: parsed.head_ref_name,
         head_oid: parsed.head_ref_oid,
-        repository: parsed
-            .head_repository
-            .and_then(|repository| repository.name_with_owner)
-            .unwrap_or(repo_slug),
+        repository: repo_slug,
         // Missing trust metadata must withhold secrets and keep caches out of the pool.
         cross_repository: parsed.is_cross_repository.unwrap_or(true),
     })

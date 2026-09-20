@@ -15,14 +15,18 @@ pub fn generate_completion(shell: SupportedShell) -> String {
     match shell {
         SupportedShell::Fish => r#"function __acre_complete
   set -l token (commandline -ct)
-  command $__acre_executable __complete $token 2>/dev/null
+  set -l executable acre
+  if test -n "$__acre_executable"; set executable $__acre_executable; end
+  if test -n "$ACRE_EXECUTABLE"; set executable $ACRE_EXECUTABLE; end
+  command $executable __complete $token 2>/dev/null
 end
 complete -c acre -f -a '(__acre_complete)'
 "#
         .to_owned(),
         SupportedShell::Powershell => r#"Register-ArgumentCompleter -Native -CommandName acre -ScriptBlock {
   param($wordToComplete)
-  & $script:AcreExecutable __complete $wordToComplete 2>$null | ForEach-Object {
+  $executable = if ($env:ACRE_EXECUTABLE) { $env:ACRE_EXECUTABLE } elseif ($script:AcreExecutable) { $script:AcreExecutable } else { (Get-Command acre -CommandType Application -ErrorAction SilentlyContinue).Source }
+  & $executable __complete $wordToComplete 2>$null | ForEach-Object {
     [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
   }
 }
@@ -30,7 +34,7 @@ complete -c acre -f -a '(__acre_complete)'
         .to_owned(),
         SupportedShell::Zsh => r#"_acre_completion() {
   local -a values
-  values=("${(@f)$(command "$_acre_executable" __complete "${words[CURRENT]}" 2>/dev/null)}")
+  values=("${(@f)$(command "${ACRE_EXECUTABLE:-${_acre_executable:-acre}}" __complete "${words[CURRENT]}" 2>/dev/null)}")
   _describe 'acre target' values
 }
 compdef _acre_completion acre
@@ -39,7 +43,11 @@ compdef _acre_completion acre
         SupportedShell::Bash => r#"_acre_completion() {
   local current
   current="${COMP_WORDS[COMP_CWORD]}"
-  mapfile -t COMPREPLY < <(command "$_acre_executable" __complete "$current" 2>/dev/null)
+  COMPREPLY=()
+  local candidate
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] && COMPREPLY+=("$candidate")
+  done < <(command "${ACRE_EXECUTABLE:-${_acre_executable:-acre}}" __complete "$current" 2>/dev/null)
 }
 complete -F _acre_completion acre
 "#
@@ -49,7 +57,12 @@ complete -F _acre_completion acre
 
 // Doubled braces in the templates below are format! escapes, not shell syntax.
 fn posix_integration(shell: &str) -> String {
-    // bash and zsh share one function body; only completion differs.
+    let lookup = if shell == "zsh" {
+        "whence -p acre"
+    } else {
+        "type -P acre"
+    };
+    // Both lookups explicitly request an executable, even after the function is installed.
     let completion = generate_completion(if shell == "zsh" {
         SupportedShell::Zsh
     } else {
@@ -59,9 +72,10 @@ fn posix_integration(shell: &str) -> String {
         r#"# Acre shell integration for {shell}.
 # Add with: eval "$(acre shell init {shell})"
 
-_acre_executable="${{ACRE_EXECUTABLE:-$(command -v acre)}}"
-if [ -z "${{ACRE_SHELL_SESSION_ID:-}}" ] && [ -n "$_acre_executable" ]; then
+_acre_executable="${{ACRE_EXECUTABLE:-$( {lookup} )}}"
+if {{ [ "${{_acre_session_owner_pid:-}}" != "$$" ] || [ -z "${{ACRE_SHELL_SESSION_ID:-}}" ]; }} && [ -n "$_acre_executable" ]; then
   export ACRE_SHELL_SESSION_ID="$(command "$_acre_executable" __session-id 2>/dev/null)"
+  _acre_session_owner_pid="$$"
 fi
 
 acre() {{
@@ -129,8 +143,9 @@ fn fish_integration() -> String {
     format!(
         r#"# Acre shell integration for fish.
 set -g __acre_executable (test -n "$ACRE_EXECUTABLE"; and echo $ACRE_EXECUTABLE; or type -P acre)
-if test -z "$ACRE_SHELL_SESSION_ID"; and test -n "$__acre_executable"
+if begin; test "$__acre_session_owner_pid" != "$fish_pid"; or test -z "$ACRE_SHELL_SESSION_ID"; end; and test -n "$__acre_executable"
   set -gx ACRE_SHELL_SESSION_ID (command $__acre_executable __session-id 2>/dev/null)
+  set -g __acre_session_owner_pid $fish_pid
 end
 function acre --description 'Warm, reusable Git workspaces'
   set -l file (mktemp (test -n "$TMPDIR"; and echo $TMPDIR; or echo /tmp)/acre-directive.XXXXXX)
@@ -166,8 +181,9 @@ fn powershell_integration() -> String {
     format!(
         r#"# Acre shell integration for PowerShell.
 $script:AcreExecutable = if ($env:ACRE_EXECUTABLE) {{ $env:ACRE_EXECUTABLE }} else {{ (Get-Command acre -CommandType Application -ErrorAction SilentlyContinue).Source }}
-if ($script:AcreExecutable -and -not $env:ACRE_SHELL_SESSION_ID) {{
+if ($script:AcreExecutable -and ($script:AcreSessionOwnerPid -ne $PID -or -not $env:ACRE_SHELL_SESSION_ID)) {{
   $env:ACRE_SHELL_SESSION_ID = (& $script:AcreExecutable __session-id 2>$null).Trim()
+  $script:AcreSessionOwnerPid = $PID
 }}
 function global:acre {{
   param([Parameter(ValueFromRemainingArguments = $true)][string[]]$AcreArgs)

@@ -28,11 +28,17 @@ pub fn create_detached_worktree(repository: &Repository, target_path: &Path, ref
     Ok(())
 }
 
-pub fn bind_target(repository: &Repository, workspace_path: &Path, target: &ResolvedTarget) -> Result<()> {
+pub fn bind_target(
+    repository: &Repository,
+    workspace_path: &Path,
+    target: &ResolvedTarget,
+    created_branch: &mut Option<String>,
+) -> Result<()> {
     match target.kind {
         TargetKind::NewBranch => {
             let branch = required(target.local_branch.as_deref(), "New branch")?;
             git(workspace_path, &["switch", "--create", branch, &target.oid])?;
+            *created_branch = Some(branch.to_owned());
         }
         TargetKind::LocalBranch => {
             let branch = required(target.local_branch.as_deref(), "Local branch")?;
@@ -43,6 +49,7 @@ pub fn bind_target(repository: &Repository, workspace_path: &Path, target: &Reso
             // Create the local branch at the remote's commit, then track it, like `git switch -c --track`.
             let remote_branch = required(target.remote_branch.as_deref(), "Remote branch")?;
             git(workspace_path, &["switch", "--create", branch, &target.oid])?;
+            *created_branch = Some(branch.to_owned());
             git(
                 workspace_path,
                 &["branch", "--set-upstream-to", remote_branch, branch],

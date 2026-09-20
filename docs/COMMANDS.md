@@ -11,6 +11,8 @@
 -V, --version           print version
 ```
 
+JSON mode returns configuration results and argument errors as JSON documents. The previous-location shortcut reports its destination without moving the shell. Finishing the current workspace in JSON mode requires invoking `done` from another directory; the private shell-resume protocol is reserved for shell navigation. Use `config set` instead of the interactive `config edit` in JSON mode. Generated shell scripts are returned in a JSON `script` field when requested with `--json`. Child commands require omitting `--json` because they own their terminal output.
+
 ## `acre [target] [-- command...]`
 
 With no target, open the interactive existing-target picker.
@@ -66,6 +68,8 @@ The branch and commits are preserved.
 ```
 
 Creates config if absent and idempotently installs or upgrades a marked shell block.
+
+Bash setup installs integration into `.bashrc` and the active login profile (`.bash_profile`, `.bash_login`, or `.profile`). Zsh setup honors `ZDOTDIR`. Re-loading integration preserves the current shell session, while child shells receive their own session identities.
 
 ## Machine commands
 
