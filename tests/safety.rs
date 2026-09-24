@@ -216,6 +216,8 @@ fn worktree_selector_does_not_fall_back_to_creating_a_branch_workspace() {
     assert!(inspected["state"]["workspaces"].as_array().unwrap().is_empty());
 }
 
+// End to end, Git never lists ignored entries behind a tracked symlink, so this holds even
+// without the symlink-parent check; that check has its own unit test in environment::roots.
 #[cfg(unix)]
 #[test]
 fn cache_cleanup_does_not_follow_a_symlinked_parent() {

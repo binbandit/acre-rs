@@ -2,9 +2,10 @@
 
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::fetch_ref;
-use crate::git::refs::{GitRef, GitRefKind, list_refs, ref_exists, resolve_oid, validate_branch_name};
+use crate::git::refs::{
+    GitRef, GitRefKind, list_refs, list_remotes, ref_exists, resolve_oid, validate_branch_name,
+};
 use crate::git::repository::Repository;
-use crate::git::runner::run_git;
 use crate::git::worktrees::GitWorktree;
 use crate::model::WorkspaceStatus;
 use crate::model::{PullRequestTarget, RepositoryState, StoredTarget, TargetKind, TrustLevel};
@@ -82,7 +83,7 @@ pub fn resolve_existing_target(
             return pull_request_target(repository, state, number);
         }
     }
-    if let Some(target) = worktree_target(repository, state, &typed) {
+    if let Some(target) = worktree_target(repository, state, &typed)? {
         return Ok(target);
     }
     let refs = list_refs(&repository.top_level)?;
@@ -159,7 +160,7 @@ fn worktree_target(
     repository: &Repository,
     state: &RepositoryState,
     typed: &TypedSelector,
-) -> Option<ResolvedTarget> {
+) -> Result<Option<ResolvedTarget>> {
     let value = typed.value.as_str();
     let by_path = || repository.worktree_at(&repository.invocation_dir.join(value));
     let by_branch = || {
@@ -174,7 +175,22 @@ fn worktree_target(
         // Branch names win over paths: "main" is almost never a directory the user meant.
         SelectorKind::Auto => by_branch().or_else(by_path),
         SelectorKind::Remote => None,
-    }?;
+    };
+    let Some(worktree) = worktree else {
+        return Ok(None);
+    };
+    // Git still holds the branch for a registration whose directory is gone; opening it anywhere
+    // else would fail, so say why instead.
+    if !worktree.exists || worktree.prunable {
+        return Err(AcreError::new(
+            "ACRE_WORKTREE_MISSING",
+            format!(
+                "{value} is registered to a worktree that no longer exists. Run git worktree prune, then try again."
+            ),
+            exit::CONFLICT,
+        )
+        .with_details(serde_json::json!({ "path": worktree.path, "hint": "git worktree prune" })));
+    }
     let stored = state.workspace_at(&worktree.path);
     let display_name = worktree
         .branch
@@ -183,12 +199,12 @@ fn worktree_target(
         .unwrap_or_else(|| value.to_owned());
     // An untrusted PR workspace stays untrusted when reopened by path.
     let trust = stored.map_or(TrustLevel::Trusted, |workspace| workspace.trust);
-    Some(ResolvedTarget {
+    Ok(Some(ResolvedTarget {
         existing_worktree: Some(worktree.clone()),
         local_branch: worktree.branch.clone(),
         pull_request: stored.and_then(|workspace| workspace.target.pull_request.clone()),
         ..ResolvedTarget::new(TargetKind::Worktree, display_name, &worktree.head, trust)
-    })
+    }))
 }
 
 /// A branch on exactly one remote, named either `remote/branch` or just `branch`.
@@ -312,12 +328,11 @@ pub fn resolve_new_target(
     // --fresh refetches the base so the new branch starts from the remote's latest commit.
     if fresh {
         let qualified = base_ref.strip_prefix("refs/remotes/").unwrap_or(&base_ref);
-        let remotes = run_git(&repository.top_level, &["remote"])?;
         // A first fetch has no tracking ref yet. Match configured remote names, longest
         // first because a remote name may itself contain a slash.
-        let names = String::from_utf8_lossy(&remotes.stdout);
-        if let Some((remote, branch)) = names
-            .lines()
+        let remotes = list_remotes(&repository.top_level)?;
+        if let Some((remote, branch)) = remotes
+            .iter()
             .filter_map(|remote| {
                 qualified
                     .strip_prefix(&format!("{remote}/"))

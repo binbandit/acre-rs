@@ -2,9 +2,9 @@
 //! workspaces, hashed so any edit blocks return, and scrubbed from idle slots.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::environment::clone::copy_path;
+use crate::environment::clone::{copy_path, create_symlink};
 use crate::error::{AcreError, Result, exit};
 use crate::git::status::is_ignored_path;
 use crate::model::{SeedFileSnapshot, TrustLevel};
@@ -46,14 +46,30 @@ pub fn seed_files_only(
         }
         let temporary = tempfile::tempdir_in(destination.parent().expect("seed path has a worktree parent"))?;
         let copied = temporary.path().join("seed");
+        let copy = match rebased_link_target(&source, &destination) {
+            Some(target) => create_symlink(&target, &copied, &source),
+            None => copy_path(&source, &copied),
+        };
         // Failed copies are cleaned up without publishing a partial secret.
-        if copy_path(&source, &copied).is_ok() {
+        if copy.is_ok() {
             fs::rename(copied, destination)?;
             seeded.push(relative.clone());
         }
     }
     Ok(())
 }
+/// A relative seed link resolves from wherever it sits. Kept as is when it still resolves from
+/// the workspace, such as into the checkout's own tracked config; otherwise it points at what it
+/// reached from the primary, instead of dangling in the workspace.
+fn rebased_link_target(source: &Path, destination: &Path) -> Option<PathBuf> {
+    let target = fs::read_link(source).ok()?;
+    let resolves_from = |link: &Path| link.parent().is_some_and(|parent| parent.join(&target).exists());
+    if target.is_absolute() || resolves_from(destination) || !resolves_from(source) {
+        return None;
+    }
+    fs::canonicalize(source.parent()?.join(&target)).ok()
+}
+
 pub fn clear_seed_files(root: &Path, files: &[String]) -> Result<()> {
     for relative in files {
         if has_symlink_parent(root, Path::new(relative))? {

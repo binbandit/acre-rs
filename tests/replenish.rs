@@ -34,7 +34,7 @@ impl PausedReplenisher {
         let gate = fixture.temp.path().join("continue");
         let marker = fixture.temp.path().join("copy-starting");
         let wrapper = bin.join("git");
-        fs::write(&wrapper, "#!/bin/sh\nfor arg do\n  if [ \"$arg\" = check-ignore ]; then\n    pwd > \"$ACRE_TEST_MARKER\"\n    while [ ! -e \"$ACRE_TEST_GATE\" ]; do sleep 0.02; done\n  fi\ndone\nexec \"$ACRE_TEST_GIT\" \"$@\"\n").unwrap();
+        fs::write(&wrapper, "#!/bin/sh\nfor arg do\n  if [ \"$arg\" = check-ignore ]; then\n    pwd > \"$ACRE_TEST_MARKER.tmp\" && mv \"$ACRE_TEST_MARKER.tmp\" \"$ACRE_TEST_MARKER\"\n    while [ ! -e \"$ACRE_TEST_GATE\" ]; do sleep 0.02; done\n  fi\ndone\nexec \"$ACRE_TEST_GIT\" \"$@\"\n").unwrap();
         fs::set_permissions(wrapper, fs::Permissions::from_mode(0o755)).unwrap();
         let child = fixture
             .acre(&["__replenish", fixture.repo.join(".git").to_str().unwrap()])

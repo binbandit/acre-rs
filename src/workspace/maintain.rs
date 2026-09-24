@@ -6,14 +6,18 @@ use crate::error::Result;
 use crate::git::operations::remove_worktree;
 use crate::git::repository::Repository;
 use crate::model::{AcreConfig, RepositoryState, WorkspaceSlot, WorkspaceStatus};
-use crate::state::repository::{LockedRepository, save_repository_state, stored_repository_state};
+use crate::state::lock::RepositoryLock;
+use crate::state::repository::{
+    LockedRepository, quarantine_unreadable_state, save_repository_state, stored_repository_state,
+};
 use crate::util::{age_millis, canonical_or_absolute};
-use crate::workspace::pool::idle_slot_is_safe;
+use crate::workspace::pool::{idle_slot_is_safe, warm_lock_path};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepairReport {
-    pub added_slots: usize,
+    /// Where an unreadable state file was moved before rebuilding from Git.
+    pub quarantined_state: Option<std::path::PathBuf>,
     pub added_workspaces: usize,
     pub removed_broken_records: usize,
     pub state: RepositoryState,
@@ -35,6 +39,7 @@ pub struct GcReport {
 }
 
 pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repository) -> Result<RepairReport> {
+    let quarantined_state = quarantine_unreadable_state(config, repository_input)?;
     let mut locked = LockedRepository::open(config, repository_input)?;
     let owned = locked.state.slots.iter().map(|slot| &slot.path).chain(
         locked
@@ -53,11 +58,7 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
     let repository = &locked.repository;
     // Loading recovers unregistered Acre worktrees, so anything absent from the persisted
     // state afterwards was recovered by this repair.
-    let stored = stored_repository_state(config, repository);
-    let known_slots: BTreeSet<&str> = stored
-        .iter()
-        .flat_map(|state| state.slots.iter().map(|slot| slot.id.as_str()))
-        .collect();
+    let stored = stored_repository_state(config, repository)?;
     let known_workspaces: BTreeSet<&str> = stored
         .iter()
         .flat_map(|state| state.workspaces.iter().map(|workspace| workspace.id.as_str()))
@@ -77,11 +78,6 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
         .workspaces
         .retain(|workspace| registered.contains(&canonical_or_absolute(&workspace.path)));
     let removed_broken_records = loaded_records - state.slots.len() - state.workspaces.len();
-    let added_slots = state
-        .slots
-        .iter()
-        .filter(|slot| !known_slots.contains(slot.id.as_str()))
-        .count();
     let added_workspaces = state
         .workspaces
         .iter()
@@ -89,7 +85,7 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
         .count();
     save_repository_state(config, repository, &state)?;
     Ok(RepairReport {
-        added_slots,
+        quarantined_state,
         added_workspaces,
         removed_broken_records,
         state,
@@ -113,10 +109,29 @@ pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Resu
         .map(|slot| slot.id.clone())
         .collect::<BTreeSet<_>>();
     let retention_ms = u128::from(config.pool.idle_retention_days) * 24 * 60 * 60 * 1000;
+    // A warm that could not verify its new slot leaves it retained with no workspace. Reclaim those
+    // only while no warm is running, since a live one is still copying caches into its slot.
+    let warming = RepositoryLock::try_acquire(&warm_lock_path(config, &locked.repository)).ok();
+    let abandoned = locked
+        .state
+        .slots
+        .iter()
+        .filter(|slot| {
+            warming.is_some()
+                && slot.status == WorkspaceStatus::Retained
+                && locked.state.workspace_at(&slot.path).is_none()
+        })
+        // Judged by the same checks as an idle slot, as if the warm had finished.
+        .map(|slot| WorkspaceSlot {
+            status: WorkspaceStatus::Idle,
+            ..slot.clone()
+        })
+        .collect::<Vec<_>>();
     let candidates = idle
         .into_iter()
         // Overflow goes regardless of age; retained slots go only once stale.
         .filter(|slot| !retained.contains(&slot.id) || age_millis(&slot.last_used_at) > retention_ms)
+        .chain(abandoned)
         .collect::<Vec<_>>();
     let mut removed = Vec::new();
     let mut skipped = Vec::new();

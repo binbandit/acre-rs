@@ -20,14 +20,6 @@ pub struct CloneReport {
     pub bytes: u64,
 }
 
-pub fn clone_environment(
-    source_root: &Path,
-    destination_root: &Path,
-    plan: &EnvironmentPlan,
-) -> Result<EnvironmentSnapshot> {
-    prepare_environment(source_root, destination_root, plan)?.publish(destination_root, plan)
-}
-
 /// A cache copy kept outside the destination worktree until it can be published under its lock.
 pub struct PreparedEnvironment {
     temporary: tempfile::TempDir,
@@ -55,7 +47,7 @@ pub fn prepare_environment(
         if source.join("pyvenv.cfg").symlink_metadata().is_ok()
             || destination_root.join(&cache_root).symlink_metadata().is_ok()
             || has_symlink_parent(destination_root, Path::new(&cache_root))?
-            || !is_ignored_path(destination_root, &format!("{cache_root}/"))?
+            || !is_ignored_path(destination_root, &ignore_query(&cache_root, &source))?
         {
             continue;
         }
@@ -74,17 +66,17 @@ impl PreparedEnvironment {
 
         for (index, (cache_root, report)) in self.caches.iter().enumerate() {
             let destination = destination_root.join(cache_root);
+            let cloned = self.temporary.path().join(index.to_string());
             // Preparation may have run without the repository lock. An installation or tracked
             // path that appeared since then belongs to its creator and must not be replaced.
             if destination.symlink_metadata().is_ok()
                 || has_symlink_parent(destination_root, Path::new(cache_root))?
-                || !is_ignored_path(destination_root, &format!("{cache_root}/"))?
+                || !is_ignored_path(destination_root, &ignore_query(cache_root, &cloned))?
             {
                 continue;
             }
             let parent = destination.parent().expect("cache path has a worktree parent");
             ensure_directory(parent)?;
-            let cloned = self.temporary.path().join(index.to_string());
             fs::rename(&cloned, &destination)?;
             cloned_files += report.files;
             cloned_bytes += report.bytes;
@@ -102,6 +94,16 @@ impl PreparedEnvironment {
         snapshot.cloned_bytes = Some(cloned_bytes);
         snapshot.clone_mode = Some(clone_mode);
         Ok(snapshot)
+    }
+}
+
+/// A trailing slash lets directory-only ignore rules such as `node_modules/` match; a file
+/// cache root such as `.pnp.cjs` is asked about as a file.
+fn ignore_query(cache_root: &str, example: &Path) -> String {
+    if fs::symlink_metadata(example).is_ok_and(|metadata| metadata.is_dir()) {
+        format!("{cache_root}/")
+    } else {
+        cache_root.to_owned()
     }
 }
 
@@ -140,9 +142,9 @@ pub fn clone_tree(source: &Path, destination: &Path) -> Result<CloneReport> {
     if let Some(report) = clone_with_platform_tool(source, destination) {
         return Ok(report);
     }
-    // Optimistic: the first file that has to be copied flips it to Copy.
+    // A plain copy, whatever the filesystem does underneath: only the platform tool proves a clone.
     let mut report = CloneReport {
-        mode: CloneMode::Reflink,
+        mode: CloneMode::Copy,
         files: 0,
         bytes: 0,
     };
@@ -154,7 +156,12 @@ fn clone_with_platform_tool(source: &Path, destination: &Path) -> Option<CloneRe
     let source_text = source.display().to_string();
     let destination_text = destination.display().to_string();
     let (program, args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
-        // Apple's cp clones on APFS; the absolute path sidesteps a GNU cp earlier on PATH that lacks -c.
+        // Apple's cp -c silently falls back to a full copy when it can't clone, which would be
+        // reported as a reflink. Only use it where cloning is certain; otherwise copy and count.
+        if !apfs_clone_possible(source, destination) {
+            return None;
+        }
+        // The absolute path sidesteps a GNU cp earlier on PATH that lacks -c.
         ("/bin/cp", vec!["-cR", &source_text, &destination_text])
     } else if cfg!(target_os = "linux") {
         (
@@ -187,6 +194,34 @@ fn clone_with_platform_tool(source: &Path, destination: &Path) -> Option<CloneRe
     }
 }
 
+/// clonefile(2) works only within one APFS volume: same device, and that device is APFS.
+fn apfs_clone_possible(source: &Path, destination: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let Some(parent) = destination.parent() else {
+            return false;
+        };
+        let same_volume = fs::symlink_metadata(source)
+            .ok()
+            .zip(fs::metadata(parent).ok())
+            .is_some_and(|(source, parent)| source.dev() == parent.dev());
+        // `df -T apfs` lists the path only when its filesystem is APFS, and exits 1 otherwise.
+        same_volume
+            && run_process(
+                "/bin/df",
+                &["-T", "apfs", &parent.display().to_string()],
+                RunOptions::default(),
+            )
+            .is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (source, destination);
+        false
+    }
+}
+
 fn clone_recursively(source: &Path, destination: &Path, report: &mut CloneReport) -> Result<()> {
     let metadata = fs::symlink_metadata(source)
         .map_err(|error| AcreError::io(format!("could not inspect {}", source.display()), error))?;
@@ -208,7 +243,6 @@ fn clone_recursively(source: &Path, destination: &Path, report: &mut CloneReport
     if metadata.is_file() {
         fs::copy(source, destination)
             .map_err(|error| AcreError::io(format!("could not copy {}", source.display()), error))?;
-        report.mode = CloneMode::Copy;
         report.files += 1;
         report.bytes += metadata.len();
         copy_permissions(source, destination);
@@ -225,9 +259,16 @@ fn copy_permissions(source: &Path, destination: &Path) {
 fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
     let target = fs::read_link(source)
         .map_err(|error| AcreError::io(format!("could not read symlink {}", source.display()), error))?;
+    create_symlink(&target, destination, source)
+}
+
+/// Creates `destination` pointing at `target`. `source` is an existing link to the same thing,
+/// which Windows consults to decide between a file and a directory link.
+pub fn create_symlink(target: &Path, destination: &Path, source: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&target, destination).map_err(|error| {
+        let _ = source;
+        std::os::unix::fs::symlink(target, destination).map_err(|error| {
             AcreError::io(
                 format!("could not create symlink {}", destination.display()),
                 error,
@@ -239,9 +280,9 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
         // Windows needs to know whether the link points at a directory to recreate it.
         let followed = fs::metadata(source).ok();
         let result = if followed.as_ref().is_some_and(|metadata| metadata.is_dir()) {
-            std::os::windows::fs::symlink_dir(&target, destination)
+            std::os::windows::fs::symlink_dir(target, destination)
         } else {
-            std::os::windows::fs::symlink_file(&target, destination)
+            std::os::windows::fs::symlink_file(target, destination)
         };
         result.map_err(|error| {
             AcreError::io(

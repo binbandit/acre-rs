@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::environment::clone::prepare_environment;
-use crate::environment::definitions::ALL_FINGERPRINT_FILES;
+use crate::environment::definitions::is_fingerprint_input;
 use crate::environment::fingerprint::{EnvironmentPlan, build_environment_plan};
 use crate::environment::inspect::inspect_environment;
 use crate::environment::roots::{inspect_ignored, overlaps_seed};
@@ -30,7 +30,7 @@ pub fn warm_repository(
     requested_slots: Option<usize>,
 ) -> Result<Vec<WorkspaceSlot>> {
     // Serialize replenishers separately; cache copying must not lock out foreground commands.
-    let _warming = RepositoryLock::try_acquire(&repository_root(config, repository).join("warm.lock"))?;
+    let _warming = RepositoryLock::try_acquire(&warm_lock_path(config, repository))?;
     // Never warm past max_slots, or gc would immediately evict what we just built.
     let requested = requested_slots
         .unwrap_or(config.pool.min_slots)
@@ -67,14 +67,18 @@ pub fn warm_repository(
         else {
             continue;
         };
-        // An explicit open may adopt the retained checkout while we copy. Manual edits and
-        // newly installed caches also belong to the user; discard our private copy in that case.
+        // An explicit open may adopt the retained checkout while we copy; it is that workspace's now.
+        if locked.state.workspace_at(&slot.path).is_some() {
+            continue;
+        }
+        // Manual edits and newly installed caches belong to the user, and a failed check proves
+        // nothing. The checkout stays retained for gc to verify, and warming stops rather than
+        // leaving another one behind on every run.
         slot.status = WorkspaceStatus::Idle;
-        if locked.state.workspace_at(&slot.path).is_some()
-            || !idle_slot_is_safe(config, &locked.repository, &slot)
+        if !idle_slot_is_safe(config, &locked.repository, &slot)
             || !inspect_environment(&slot.path, &plan)?.present_roots.is_empty()
         {
-            continue;
+            break;
         }
         slot.environment = Some(
             match prepared
@@ -92,6 +96,11 @@ pub fn warm_repository(
     }
     let _ = remember_repository(config, repository);
     Ok(created)
+}
+
+/// Held for the whole of a warm, including the unlocked cache copy into a retained slot.
+pub fn warm_lock_path(config: &AcreConfig, repository: &Repository) -> PathBuf {
+    repository_root(config, repository).join("warm.lock")
 }
 
 /// The commit warm slots start from: the remote default branch when known, else the local one.
@@ -251,7 +260,7 @@ pub fn source_matches_plan(
             .entries
             .iter()
             .flat_map(|entry| std::iter::once(&entry.path).chain(entry.original_path.iter()))
-            .all(|path| !ALL_FINGERPRINT_FILES.contains(&path.rsplit('/').next().unwrap_or_default()))
+            .all(|path| !is_fingerprint_input(path))
     });
     manifests_unchanged
         && resolve_oid(source, "HEAD").ok().flatten().is_some_and(|oid| {

@@ -57,18 +57,15 @@ fn repair_counts_only_records_it_actually_recovered_or_dropped() {
 
     fixture.forget_state();
     let report = fixture.json(&["system", "repair", "--json"]);
-    assert_eq!(report["report"]["addedSlots"], 0, "{report}");
     assert_eq!(report["report"]["addedWorkspaces"], 2, "{report}");
     assert_eq!(report["report"]["removedBrokenRecords"], 0, "{report}");
 
     let report = fixture.json(&["system", "repair", "--json"]);
-    assert_eq!(report["report"]["addedSlots"], 0, "{report}");
     assert_eq!(report["report"]["addedWorkspaces"], 0, "{report}");
     assert_eq!(report["report"]["removedBrokenRecords"], 0, "{report}");
 
     fs::remove_dir_all(&workspace).expect("delete workspace directory");
     let report = fixture.json(&["system", "repair", "--json"]);
-    assert_eq!(report["report"]["addedSlots"], 0, "{report}");
     assert_eq!(report["report"]["addedWorkspaces"], 0, "{report}");
     assert_eq!(report["report"]["removedBrokenRecords"], 1, "{report}");
 }

@@ -13,14 +13,19 @@ pub struct EcosystemDefinition {
 // Manifest names fingerprinted at every depth, including toolchain files shared across ecosystems.
 pub const ALL_FINGERPRINT_FILES: &[&str] = &[
     "package.json",
+    // Package manager settings such as pnpm's node-linker change the installed layout.
+    ".npmrc",
+    ".pnpmfile.cjs",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     "yarn.lock",
+    ".yarnrc",
     ".yarnrc.yml",
     "package-lock.json",
     "npm-shrinkwrap.json",
     "bun.lock",
     "bun.lockb",
+    "bunfig.toml",
     "turbo.json",
     "next.config.js",
     "next.config.mjs",
@@ -38,9 +43,24 @@ pub const ALL_FINGERPRINT_FILES: &[&str] = &[
     "uv.lock",
     "poetry.lock",
     "requirements.txt",
+    "Pipfile",
+    "Pipfile.lock",
+    "setup.py",
+    "setup.cfg",
     "go.mod",
     "go.sum",
+    "go.work",
+    "go.work.sum",
 ];
+
+/// patch-package applies every file in a package's `patches/` directory during install.
+pub const PATCH_DIRECTORY: &str = "patches";
+
+/// Whether a changed repository path can change an environment's fingerprint.
+pub fn is_fingerprint_input(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or_default();
+    ALL_FINGERPRINT_FILES.contains(&name) || path.split('/').any(|component| component == PATCH_DIRECTORY)
+}
 
 const PNPM: EcosystemDefinition = EcosystemDefinition {
     id: "pnpm",
@@ -50,7 +70,17 @@ const PNPM: EcosystemDefinition = EcosystemDefinition {
 };
 const YARN: EcosystemDefinition = EcosystemDefinition {
     id: "yarn",
-    cache_roots: &["node_modules", ".yarn/cache", ".yarn/unplugged"],
+    // Install output beside the caches: Berry's install state and Plug'n'Play loaders.
+    cache_roots: &[
+        "node_modules",
+        ".yarn/cache",
+        ".yarn/unplugged",
+        ".yarn/install-state.gz",
+        ".yarn/build-state.yml",
+        ".pnp.cjs",
+        ".pnp.loader.mjs",
+        ".pnp.data.json",
+    ],
     required_roots: &["node_modules"],
     seed_files: &[".env", ".env.local"],
 };
@@ -86,7 +116,13 @@ const RUST: EcosystemDefinition = EcosystemDefinition {
 };
 const PYTHON: EcosystemDefinition = EcosystemDefinition {
     id: "python",
-    cache_roots: &[".venv", ".pytest_cache", ".mypy_cache", ".ruff_cache"],
+    cache_roots: &[
+        ".venv",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    ],
     required_roots: &[".venv"],
     seed_files: &[".env", ".env.local"],
 };
@@ -97,7 +133,15 @@ const GO: EcosystemDefinition = EcosystemDefinition {
     seed_files: &[".env", ".env.local"],
 };
 
-pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefinition> {
+/// An ecosystem found in one project directory (`""` for the repository root).
+#[derive(Debug, Clone)]
+pub struct DetectedEcosystem {
+    pub directory: String,
+    pub definition: EcosystemDefinition,
+}
+
+/// Every ecosystem in every project directory, ordered by directory.
+pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<DetectedEcosystem> {
     let mut directories: BTreeMap<&str, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
     for (path, content) in files {
         let (directory, name) = path.rsplit_once('/').unwrap_or(("", path));
@@ -106,13 +150,17 @@ pub fn detect_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefi
             .or_default()
             .insert(name.to_owned(), content.clone());
     }
-    let mut result = BTreeMap::new();
-    for directory in directories.values() {
-        for ecosystem in detect_directory_ecosystems(directory) {
-            result.insert(ecosystem.id, ecosystem);
-        }
-    }
-    result.into_values().collect()
+    directories
+        .into_iter()
+        .flat_map(|(directory, files)| {
+            detect_directory_ecosystems(&files)
+                .into_iter()
+                .map(move |definition| DetectedEcosystem {
+                    directory: directory.to_owned(),
+                    definition,
+                })
+        })
+        .collect()
 }
 
 fn detect_directory_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<EcosystemDefinition> {
@@ -164,14 +212,22 @@ fn detect_directory_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<Ecosyst
     if files.contains_key("Cargo.toml") || files.contains_key("Cargo.lock") {
         result.push(RUST);
     }
-    if files.contains_key("pyproject.toml")
-        || files.contains_key("uv.lock")
-        || files.contains_key("poetry.lock")
-        || files.contains_key("requirements.txt")
+    if [
+        "pyproject.toml",
+        "uv.lock",
+        "poetry.lock",
+        "requirements.txt",
+        "Pipfile",
+        "Pipfile.lock",
+        "setup.py",
+        "setup.cfg",
+    ]
+    .iter()
+    .any(|file| files.contains_key(*file))
     {
         result.push(PYTHON);
     }
-    if files.contains_key("go.mod") {
+    if files.contains_key("go.mod") || files.contains_key("go.work") {
         result.push(GO);
     }
     result

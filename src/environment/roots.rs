@@ -8,8 +8,8 @@ use crate::error::Result;
 use crate::git::status::list_ignored_entries;
 use crate::util::has_symlink_parent;
 
-/// Where a worktree's ignored data lives: approved cache-root directories, and the
-/// Git-ignored paths that fall outside every one of them.
+/// Where a worktree's ignored data lives: approved cache roots (directories, or install-state
+/// files such as `.pnp.cjs`), and the Git-ignored paths that fall outside every one of them.
 #[derive(Debug)]
 pub struct IgnoredLayout {
     pub cache_roots: Vec<String>,
@@ -17,7 +17,7 @@ pub struct IgnoredLayout {
 }
 
 impl IgnoredLayout {
-    /// True when a directory matching `root` is present at any depth.
+    /// True when a cache root matching `root` is present at any depth.
     pub fn has_cache_root(&self, root: &str) -> bool {
         self.cache_roots
             .iter()
@@ -36,7 +36,7 @@ pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<Ignore
     for entry in list_ignored_entries(worktree)? {
         let relative = entry.trim_end_matches('/');
         if cache_roots.iter().any(|root| is_within_root(relative, root))
-            && safe_cache_directory(worktree, relative)?
+            && safe_cache_path(worktree, relative)?
         {
             found.insert(relative.to_owned());
             continue;
@@ -51,7 +51,7 @@ pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<Ignore
                 .iter()
                 .filter_map(|root| nested_cache_root(relative, root))
             {
-                if safe_cache_directory(worktree, &nested)? {
+                if safe_cache_path(worktree, &nested)? {
                     found.insert(nested);
                 }
             }
@@ -117,9 +117,12 @@ fn collect_unknown(
     Ok(())
 }
 
-fn safe_cache_directory(worktree: &Path, relative: &str) -> Result<bool> {
+/// A real directory or file reached without passing through a symlink, so copying or removing
+/// it cannot touch anything outside the worktree.
+fn safe_cache_path(worktree: &Path, relative: &str) -> Result<bool> {
     Ok(!has_symlink_parent(worktree, Path::new(relative))?
-        && fs::symlink_metadata(worktree.join(relative)).is_ok_and(|metadata| metadata.is_dir()))
+        && fs::symlink_metadata(worktree.join(relative))
+            .is_ok_and(|metadata| metadata.is_dir() || metadata.is_file()))
 }
 
 /// Cache-root directories beneath `relative` when the directory holds nothing else, or `None`
@@ -129,15 +132,17 @@ fn cache_roots_filling(worktree: &Path, relative: &str, cache_roots: &[String]) 
     for child in fs::read_dir(worktree.join(relative)).ok()? {
         let child = child.ok()?;
         let child_relative = format!("{relative}/{}", child.file_name().to_str()?);
-        if !child.file_type().ok()?.is_dir() {
-            return None;
-        }
-        if cache_roots
-            .iter()
-            .any(|root| is_within_root(&child_relative, root))
+        let file_type = child.file_type().ok()?;
+        if (file_type.is_dir() || file_type.is_file())
+            && cache_roots
+                .iter()
+                .any(|root| is_within_root(&child_relative, root))
         {
             found.push(child_relative);
             continue;
+        }
+        if !file_type.is_dir() {
+            return None;
         }
         found.extend(cache_roots_filling(worktree, &child_relative, cache_roots)?);
     }
@@ -162,7 +167,7 @@ fn nested_cache_root(entry: &str, root: &str) -> Option<String> {
 /// True when the repository-relative `path` is `root` or lies beneath a directory matching
 /// `root` at any depth, so `packages/app/node_modules` matches the root `node_modules`.
 /// Both sides arrive without `./` prefixes or trailing slashes.
-fn is_within_root(path: &str, root: &str) -> bool {
+pub fn is_within_root(path: &str, root: &str) -> bool {
     format!("/{path}/").contains(&format!("/{root}/"))
 }
 
@@ -246,6 +251,39 @@ mod tests {
         let layout = inspect_ignored(repo.path(), &strings(&["node_modules"])).expect("layout");
         assert!(layout.cache_roots.is_empty(), "{:?}", layout.cache_roots);
         assert_eq!(layout.unknown, strings(&["packages/"]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cache_root_behind_a_symlinked_parent_is_never_safe() {
+        let repo = repository("", &[]);
+        let outside = tempfile::tempdir().expect("outside");
+        fs::create_dir_all(outside.path().join("cache")).expect("outside cache");
+        std::os::unix::fs::symlink(outside.path(), repo.path().join(".next")).expect("link");
+        // Git never lists entries behind a symlink, but the directory can be swapped for one
+        // between listing and removal; this check is what stops cleanup following it.
+        assert!(!safe_cache_path(repo.path(), ".next/cache").expect("check"));
+        fs::remove_file(repo.path().join(".next")).expect("unlink");
+        fs::create_dir_all(repo.path().join(".next/cache")).expect("real cache");
+        assert!(safe_cache_path(repo.path(), ".next/cache").expect("check"));
+    }
+
+    #[test]
+    fn install_state_files_are_cache_roots_even_inside_a_collapsed_directory() {
+        let repo = repository(
+            ".yarn\n.pnp.*\n",
+            &[".yarn/cache/dep.zip", ".yarn/install-state.gz", ".pnp.cjs"],
+        );
+        let roots = strings(&[".yarn/cache", ".yarn/install-state.gz", ".pnp.cjs"]);
+        let layout = inspect_ignored(repo.path(), &roots).expect("layout");
+        assert_eq!(layout.cache_roots, roots_sorted(&roots));
+        assert!(layout.unknown.is_empty(), "{:?}", layout.unknown);
+    }
+
+    fn roots_sorted(values: &[String]) -> Vec<String> {
+        let mut sorted = values.to_vec();
+        sorted.sort();
+        sorted
     }
 
     #[test]

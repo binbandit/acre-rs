@@ -229,7 +229,12 @@ fn activate(
     created_branch: &mut Option<String>,
 ) -> Result<(WorkspaceRecord, Option<WorkspaceLease>)> {
     // Bind before seeding: the baseline below reads ignore rules, and those belong to the target commit.
-    bind_target(repository, active_path, target, created_branch)?;
+    bind_target(
+        repository,
+        active_path,
+        &StoredTarget::from(target),
+        created_branch,
+    )?;
     // Seed files always come from the primary checkout, the one copy the user actually maintains.
     let seed_source = repository.primary_path();
     // Three ways to arrive at caches: already in the slot, cloned from a sibling, or none yet.
@@ -372,6 +377,8 @@ fn launch_replenish(common_dir: &Path) {
     let _ = Command::new(executable)
         .arg("__replenish")
         .arg(common_dir)
+        // Anywhere but the caller's directory: a workspace with our process in it can't be returned.
+        .current_dir(common_dir)
         // Tells the child to swallow failures: nobody is watching its output.
         .env("ACRE_BACKGROUND", "1")
         .stdin(Stdio::null())

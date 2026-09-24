@@ -6,6 +6,7 @@ use crate::environment::seed::{clear_seed_files, seed_files_only};
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::{detach_workspace, remove_worktree, restore_stored_target};
 use crate::git::repository::Repository;
+use crate::git::status::is_ignored_path;
 use crate::model::{
     AcreConfig, CloneMode, EnvironmentSnapshot, EnvironmentState, RepositoryState, TrustLevel,
     WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
@@ -84,7 +85,15 @@ pub fn return_workspace(
     let slot = slot_to_keep(config, &repository, state, &workspace, &environment);
     let pooled = slot.is_some();
 
-    if let Err(error) = pool_or_remove(config, &repository, state, &workspace, environment, slot) {
+    if let Err(error) = pool_or_remove(
+        config,
+        &repository,
+        state,
+        &workspace,
+        &plan.seed_files,
+        environment,
+        slot,
+    ) {
         let _ = restore_workspace(&repository, &workspace);
         return Err(error);
     }
@@ -152,6 +161,7 @@ fn pool_or_remove(
     repository: &Repository,
     state: &mut RepositoryState,
     workspace: &WorkspaceRecord,
+    seed_files: &[String],
     environment: EnvironmentSnapshot,
     slot: Option<WorkspaceSlot>,
 ) -> Result<()> {
@@ -159,8 +169,19 @@ fn pool_or_remove(
     detach_workspace(&workspace.path)?;
     match slot {
         Some(mut slot) => {
-            // Secrets never sit in the pool: the next occupant could be an untrusted PR.
-            clear_seed_files(&workspace.path, &workspace.seeded_paths)?;
+            // Secrets never sit in the pool: the next occupant could be an untrusted PR. That
+            // includes seed-named files the user created, which reach here only when unknown
+            // ignored files are configured not to block a return.
+            let mut scrub = workspace.seeded_paths.clone();
+            for relative in seed_files {
+                if !scrub.contains(relative)
+                    && workspace.path.join(relative).symlink_metadata().is_ok()
+                    && is_ignored_path(&workspace.path, relative)?
+                {
+                    scrub.push(relative.clone());
+                }
+            }
+            clear_seed_files(&workspace.path, &scrub)?;
             slot.head = repository
                 .worktree_at(&workspace.path)
                 .map(|worktree| worktree.head.clone());
