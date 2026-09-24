@@ -7,7 +7,7 @@ use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
 use crate::git::repository::{Repository, discover_repository, discover_repository_from_common_dir};
 use crate::git::status::read_status;
-use crate::model::{PendingDoneOperation, WorkspaceOwnership, WorkspaceRecord};
+use crate::model::{PendingDoneOperation, StoredTarget, WorkspaceOwnership, WorkspaceRecord};
 use crate::shell::directive::write_resume_directive;
 use crate::shell::navigation::{navigate_direct, record_shell_move};
 use crate::state::config::load_config;
@@ -36,12 +36,12 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         let target = resolve_existing_target(&repository, &state, selector)?;
         target
             .existing_worktree
-            .map(|worktree| worktree.path)
+            .as_ref()
+            .map(|worktree| worktree.path.clone())
+            // Match by target identity: PR number and repository, or branch. Never by an absent branch.
             .or_else(|| {
                 state
-                    .workspaces
-                    .iter()
-                    .find(|workspace| workspace.target.local_branch == target.local_branch)
+                    .workspace_for_target(&StoredTarget::from(&target))
                     .map(|workspace| workspace.path.clone())
             })
             .ok_or_else(|| {
@@ -82,20 +82,37 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         // Unknown and external worktrees get the same treatment: we leave, we don't touch.
         .is_none_or(|workspace| workspace.ownership == WorkspaceOwnership::External)
     {
+        // An idle slot has no workspace record either, but it is ours and already in the pool.
+        let idle_slot = workspace.is_none()
+            && state
+                .slots
+                .iter()
+                .any(|slot| canonical_or_absolute(&slot.path) == canonical_or_absolute(&target_path));
+        let noun = if idle_slot {
+            "Warm slot"
+        } else {
+            "External worktree"
+        };
+        let outcome = if idle_slot {
+            "is already in the pool"
+        } else {
+            "was left untouched"
+        };
         let renderer = Renderer::new(context);
         if context.global.json {
             renderer.json(&serde_json::json!({
                 "ok": true,
                 "action": "done",
-                "external": true,
-                "retained": true,
+                "external": !idle_slot,
+                "pooled": idle_slot,
+                "retained": !idle_slot,
                 "path": target_path,
             }));
             return Ok(exit::SUCCESS);
         }
         if !is_current {
             renderer.line(format!(
-                "<dim>External worktree {} was left untouched.</dim>",
+                "<dim>{noun} {} {outcome}.</dim>",
                 renderer.value(selector.unwrap_or_else(|| target_path.to_str().unwrap_or("worktree")))
             ));
             return Ok(exit::SUCCESS);
@@ -106,7 +123,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
             let _ = release_shell_session_lease(&config, &repository, session_id);
         }
         renderer.line(format!(
-            "<dim>External worktree {} was left untouched.</dim>",
+            "<dim>{noun} {} {outcome}.</dim>",
             renderer.value(
                 target_path
                     .file_name()
@@ -230,13 +247,6 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
             exit::REFUSED,
         ));
     }
-    record_shell_move(
-        context,
-        &config,
-        operation.original_directory.as_deref().unwrap_or(&workspace.path),
-        &shell_directory,
-        false,
-    )?;
     let registered = repository.worktree_at(&workspace.path);
     let status = read_status(&workspace.path)?;
     // Anything that happened between the two phases voids the earlier assessment.
@@ -244,6 +254,7 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
         || status.fingerprint != operation.expected_status_fingerprint
     {
         remove_pending_operation(&config, token)?;
+        record_left_workspace(context, &config, &operation, &workspace, &shell_directory, false)?;
         return Err(AcreError::new(
             "ACRE_WORKSPACE_CHANGED",
             "The workspace changed while Acre was moving the shell. Acre left it active.",
@@ -256,20 +267,48 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
         &repository,
         &workspace.id,
         &AssessOptions {
-            allowed_session_id: operation.current_session_id,
+            allowed_session_id: operation.current_session_id.clone(),
             ignored_pids: [Some(std::process::id()), context.shell.pid]
                 .into_iter()
                 .flatten()
                 .collect(),
         },
-    )?;
+    );
     remove_pending_operation(&config, token)?;
+    let returned = result.as_ref().is_ok_and(|result| result.returned);
+    record_left_workspace(
+        context,
+        &config,
+        &operation,
+        &workspace,
+        &shell_directory,
+        returned,
+    )?;
+    let result = result?;
     if !result.returned {
         render_unsafe(context, &result.assessment);
         return Ok(exit::REFUSED);
     }
     render_done(context, &workspace, result.pooled, result.external);
     Ok(exit::SUCCESS)
+}
+
+/// Records the shell's move out of the workspace. A returned workspace is a pooled slot now, so
+/// it must not become the place `acre -` leads back to.
+fn record_left_workspace(
+    context: &CommandContext,
+    config: &AcreConfig,
+    operation: &PendingDoneOperation,
+    workspace: &WorkspaceRecord,
+    shell_directory: &Path,
+    returned: bool,
+) -> Result<()> {
+    let from = if returned {
+        shell_directory
+    } else {
+        operation.original_directory.as_deref().unwrap_or(&workspace.path)
+    };
+    record_shell_move(context, config, from, shell_directory, false)
 }
 
 fn safe_destination(
@@ -290,11 +329,8 @@ fn safe_destination(
         }
     }
     let primary = repository
-        .worktrees
-        .iter()
         // Fall back to the primary worktree; it is permanent, so it is always a safe place to stand.
-        .find(|worktree| worktree.is_main)
-        .or_else(|| repository.worktrees.first())
+        .primary_worktree()
         .filter(|worktree| {
             canonical_or_absolute(&worktree.path) != canonical_or_absolute(leaving_path)
                 && worktree.path.exists()
@@ -307,8 +343,9 @@ fn safe_destination(
             )
         })?;
     // Keep the relative position: leaving src/api lands in the primary's src/api when it exists.
-    let candidate = shell_directory
-        .strip_prefix(leaving_path)
+    // Compared canonically: the shell reports resolved paths, stored paths may go through symlinks.
+    let candidate = canonical_or_absolute(shell_directory)
+        .strip_prefix(canonical_or_absolute(leaving_path))
         .ok()
         .filter(|relative| !relative.as_os_str().is_empty())
         .map(|relative| primary.path.join(relative));

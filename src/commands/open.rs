@@ -8,13 +8,14 @@ use crate::error::{AcreError, Result, exit};
 use crate::git::refs::{GitRef, GitRefKind, list_refs};
 use crate::git::repository::{Repository, discover_repository};
 use crate::git::runner::run_passthrough;
-use crate::model::RepositoryState;
+use crate::model::{RepositoryState, WorkspaceStatus};
 use crate::shell::navigation::navigate_direct;
 use crate::state::config::load_config;
 use crate::state::repository::load_repository_state;
 use crate::state::shell::read_shell_state;
 use crate::ui::output::Renderer;
 use crate::ui::picker::{PickerResult, PickerRow, pick};
+use crate::util::canonical_or_absolute;
 use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
 use crate::workspace::lease::{LeaseRequest, release_workspace_lease};
 use crate::workspace::resolve::resolve_existing_target;
@@ -59,11 +60,18 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
             );
             return Ok(exit::SUCCESS);
         }
-        let label = previous
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("previous location");
-        navigate_direct(context, &config, &previous, label)?;
+        // Workspace directories are named by slot id, so the branch there is the better name.
+        let label = discover_repository(&previous)
+            .ok()
+            .and_then(|repository| repository.current_worktree)
+            .and_then(|worktree| worktree.branch)
+            .or_else(|| {
+                previous
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "previous location".to_owned());
+        navigate_direct(context, &config, &previous, &label)?;
         return Ok(exit::SUCCESS);
     }
 
@@ -128,6 +136,15 @@ fn picker_rows(repository: &Repository, state: &RepositoryState) -> Result<Vec<P
     let mut rows = Vec::new();
     let mut used = std::collections::BTreeSet::new();
     for worktree in &repository.worktrees {
+        // Idle pool slots are infrastructure, not work; picking one would pull it out of the pool.
+        let pooled = state.slots.iter().any(|slot| {
+            slot.status == WorkspaceStatus::Idle
+                && canonical_or_absolute(&slot.path) == canonical_or_absolute(&worktree.path)
+        });
+        // So is a bare repository directory: there is nothing checked out to open.
+        if worktree.bare || (pooled && state.workspace_at(&worktree.path).is_none()) {
+            continue;
+        }
         let label = worktree
             .branch
             .clone()

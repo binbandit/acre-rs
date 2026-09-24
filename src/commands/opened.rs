@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::model::{AcreConfig, EnvironmentState, TargetKind, TrustLevel};
 use crate::shell::directive::write_cd_directive;
 use crate::shell::navigation::navigation_destination;
-use crate::shell::navigation::record_shell_move;
+use crate::shell::navigation::{record_shell_move, shell_directory};
 use crate::ui::output::Renderer;
 use crate::util::{display_path, shell_quote};
 use crate::workspace::activate::MaterializedWorkspace;
@@ -41,7 +41,7 @@ pub fn navigate_to_materialized(
     record_shell_move(
         context,
         config,
-        &std::env::current_dir()?,
+        &shell_directory(context),
         &destination,
         result.lease.is_some(),
     )?;
@@ -146,8 +146,9 @@ pub fn render_materialized_summary(
     }
 }
 fn environment_label(result: &MaterializedWorkspace) -> String {
+    // Only Acre's own workspaces carry an environment; a primary or external worktree is just opened.
     let Some(environment) = &result.workspace.environment else {
-        return "environment unknown".to_owned();
+        return "existing worktree".to_owned();
     };
     let generation = &environment.fingerprint[..environment.fingerprint.len().min(8)];
     match (result.reused, environment.state) {

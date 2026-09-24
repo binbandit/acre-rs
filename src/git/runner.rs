@@ -44,8 +44,16 @@ impl Default for RunOptions {
 }
 
 pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Result<ProcessResult> {
+    run_command(Command::new(executable), executable, args, options)
+}
+
+fn run_command(
+    mut command: Command,
+    executable: &str,
+    args: &[&str],
+    options: RunOptions,
+) -> Result<ProcessResult> {
     let started = Instant::now();
-    let mut command = Command::new(executable);
     command
         .args(args)
         // Always piped: git must never block waiting on the user's terminal for input.
@@ -117,7 +125,8 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
         }
     };
 
-    // No code means a signal killed it; call that a plain failure rather than success.
+    // No code means a signal killed it. That is never an answer, even for callers that accept 1.
+    let killed = status.code().is_none();
     let status_code = status.code().unwrap_or(1);
     let result = ProcessResult {
         argv: std::iter::once(executable)
@@ -132,7 +141,7 @@ pub fn run_process(executable: &str, args: &[&str], options: RunOptions) -> Resu
     };
 
     // Callers that expect a non-zero answer (rev-parse --verify, check-ignore) opt in per call.
-    if options.accepted_statuses.contains(&status_code) {
+    if !killed && options.accepted_statuses.contains(&status_code) {
         if let Some(input) = input {
             input?;
         }
@@ -184,12 +193,42 @@ pub fn run_git(cwd: &Path, args: &[&str]) -> Result<ProcessResult> {
     run_git_with(cwd, args, RunOptions::default())
 }
 
+/// Variables that point Git at a specific repository (`git rev-parse --local-env-vars`). Git exports
+/// some of them to hooks and `rebase --exec`, where they would redirect every call to that worktree.
+const REPOSITORY_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
 pub fn run_git_with(cwd: &Path, args: &[&str], options: RunOptions) -> Result<ProcessResult> {
     let args: Vec<&str> = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
         .into_iter()
         .chain(args.iter().copied())
         .collect();
-    run_process(
+    let mut command = Command::new("git");
+    for name in REPOSITORY_ENV_VARS {
+        command.env_remove(name);
+    }
+    command
+        // Git runs in its own process group, where a credential prompt would stop it rather than ask.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // Status would otherwise refresh the index and race the user's own commands for index.lock.
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    run_command(
+        command,
         "git",
         &args,
         RunOptions {
@@ -197,6 +236,11 @@ pub fn run_git_with(cwd: &Path, args: &[&str], options: RunOptions) -> Result<Pr
             ..options
         },
     )
+}
+
+/// The installed Git's version line, for diagnostics.
+pub fn git_version() -> Result<String> {
+    run_process("git", &["--version"], RunOptions::default()).map(|result| decode_stdout(&result))
 }
 
 /// Runs a program with the user's terminal attached, for `acre <target> -- <command>`.

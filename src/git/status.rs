@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use crate::error::Result;
-use crate::git::runner::{RunOptions, run_git, run_git_with};
+use crate::error::{AcreError, Result, exit};
+use crate::git::runner::{ProcessResult, RunOptions, run_git, run_git_with};
 use crate::util::sha256;
 use serde::{Deserialize, Serialize};
 
@@ -37,8 +37,26 @@ pub enum StatusEntryKind {
 }
 
 pub fn read_status(cwd: &Path) -> Result<WorkingTreeStatus> {
-    let result = run_git(cwd, &["status", "--porcelain=v2", "-z", "--untracked-files=all"])?;
+    let result = complete_listing(
+        cwd,
+        run_git(cwd, &["status", "--porcelain=v2", "-z", "--untracked-files=all"])?,
+    )?;
     Ok(parse_status(&result.stdout))
+}
+
+/// Git skips directories it cannot read with only a warning and exits 0. A listing with gaps
+/// can't prove a workspace safe, so any complaint on stderr makes the whole listing an error.
+fn complete_listing(cwd: &Path, result: ProcessResult) -> Result<ProcessResult> {
+    let stderr = String::from_utf8_lossy(&result.stderr).trim().to_owned();
+    if stderr.is_empty() {
+        return Ok(result);
+    }
+    Err(AcreError::new(
+        "ACRE_GIT_INCOMPLETE",
+        format!("Git could not read everything in {}: {stderr}", cwd.display()),
+        exit::GIT,
+    )
+    .with_details(serde_json::json!({ "path": cwd, "stderr": stderr })))
 }
 
 pub fn parse_status(buffer: &[u8]) -> WorkingTreeStatus {
@@ -164,7 +182,7 @@ pub fn in_progress_operation(cwd: &Path) -> Result<Option<String>> {
 
 /// Ignored paths reported by Git, collapsed to their topmost ignored directory.
 pub fn list_ignored_entries(cwd: &Path) -> Result<Vec<String>> {
-    let result = run_git(
+    let listing = run_git(
         cwd,
         &[
             "ls-files",
@@ -177,6 +195,7 @@ pub fn list_ignored_entries(cwd: &Path) -> Result<Vec<String>> {
             "-z",
         ],
     )?;
+    let result = complete_listing(cwd, listing)?;
     let mut entries: Vec<String> = result
         .stdout
         .split(|byte| *byte == 0)

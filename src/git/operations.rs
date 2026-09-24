@@ -8,7 +8,6 @@ use crate::git::repository::Repository;
 use crate::git::runner::{ProcessResult, RunOptions, decode_stdout, run_git_with};
 use crate::model::{StoredTarget, TargetKind};
 use crate::util::ensure_directory;
-use crate::workspace::resolve::ResolvedTarget;
 
 // Generous: worktree add on a big repo rewrites the index; fetch gets its own longer limit.
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -31,7 +30,7 @@ pub fn create_detached_worktree(repository: &Repository, target_path: &Path, ref
 pub fn bind_target(
     repository: &Repository,
     workspace_path: &Path,
-    target: &ResolvedTarget,
+    target: &StoredTarget,
     created_branch: &mut Option<String>,
 ) -> Result<()> {
     match target.kind {
@@ -102,16 +101,6 @@ pub fn remove_worktree(repository: &Repository, target_path: &Path, force: bool)
     Ok(())
 }
 
-pub fn prune_worktrees(repository: &Repository) -> Result<()> {
-    git(&repository.top_level, &["worktree", "prune"])?;
-    Ok(())
-}
-
-pub fn repair_worktrees(repository: &Repository) -> Result<()> {
-    git(&repository.top_level, &["worktree", "repair"])?;
-    Ok(())
-}
-
 pub fn fetch_ref(
     repository: &Repository,
     remote: &str,
@@ -178,7 +167,7 @@ fn path_exists(path: &Path) -> AcreError {
     )
 }
 
-fn verify_bound_head(repository: &Repository, workspace_path: &Path, target: &ResolvedTarget) -> Result<()> {
+fn verify_bound_head(repository: &Repository, workspace_path: &Path, target: &StoredTarget) -> Result<()> {
     let actual = decode_stdout(&run_git_with(
         workspace_path,
         &["rev-parse", "HEAD"],

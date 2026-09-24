@@ -2,11 +2,10 @@
 
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{AcreError, Result, exit};
-use crate::git::runner::{RunOptions, run_git_with, run_process};
+use crate::git::runner::{RunOptions, decode_stdout, run_git_with};
 use crate::git::worktrees::{
     GitWorktree, find_current_worktree, list_worktrees, parse_worktree_porcelain, with_existence,
 };
@@ -31,12 +30,17 @@ pub struct Repository {
 }
 
 impl Repository {
-    /// The main worktree's directory, which holds the trusted copies of local files.
+    /// The main worktree's directory, which holds the trusted copies of local files. In a bare
+    /// layout the first entry is the bare Git directory, so the first real checkout stands in.
     pub fn primary_path(&self) -> &Path {
-        self.worktrees
-            .first()
+        self.primary_worktree()
             .map(|worktree| worktree.path.as_path())
             .unwrap_or(self.top_level.as_path())
+    }
+
+    /// The permanent checkout: Git's main worktree, or the first checkout beside a bare repository.
+    pub fn primary_worktree(&self) -> Option<&GitWorktree> {
+        self.worktrees.iter().find(|worktree| !worktree.bare)
     }
 
     /// The registered worktree at `path`, compared after canonicalization.
@@ -79,14 +83,15 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
         .unwrap_or_else(|| "repository".to_owned());
     // Worktrees share a Git common directory; independent clones of one remote do not share state.
     let identity = common_dir.as_os_str().as_encoded_bytes();
-    let remote_head = remote
-        .as_deref()
-        .and_then(|remote| read_remote_head(&common_dir, remote));
+    let remote_head = match remote.as_deref() {
+        Some(remote) => read_remote_head(&top_level, remote)?,
+        None => None,
+    };
     // What the remote says HEAD is beats init.defaultBranch, which beats whatever main happens to be on.
     let default_branch = remote_head.or(config.default_branch).or_else(|| {
         worktrees
             .iter()
-            .find(|worktree| worktree.is_main)
+            .find(|worktree| !worktree.bare)
             .and_then(|worktree| worktree.branch.clone())
     });
     let current_worktree = find_current_worktree(&worktrees, cwd);
@@ -130,11 +135,10 @@ pub fn discover_repository_from_common_dir(common_dir: &Path) -> Result<Reposito
     let git_dir = format!("--git-dir={}", common_dir.display());
     // Run from beside the .git dir: the caller's own directory may be a workspace that no longer exists.
     let parent = common_dir.parent().unwrap_or_else(|| Path::new("."));
-    let result = run_process(
-        "git",
+    let result = run_git_with(
+        parent,
         &[&git_dir, "worktree", "list", "--porcelain", "-z"],
         RunOptions {
-            cwd: Some(parent.to_path_buf()),
             accepted_statuses: &[0, 128],
             ..RunOptions::default()
         },
@@ -148,7 +152,8 @@ pub fn discover_repository_from_common_dir(common_dir: &Path) -> Result<Reposito
     }
     let first = parse_worktree_porcelain(&result.stdout)
         .into_iter()
-        .next()
+        // A bare repository has no checkout to discover from; its first linked worktree does.
+        .find(|worktree| !worktree.bare && worktree.path.is_dir())
         .ok_or_else(|| {
             AcreError::new(
                 "ACRE_REPOSITORY_UNAVAILABLE",
@@ -156,7 +161,6 @@ pub fn discover_repository_from_common_dir(common_dir: &Path) -> Result<Reposito
                 exit::ENVIRONMENT,
             )
         })?;
-    // The first listed worktree is the main one; discovering from there gives the full picture.
     discover_repository(&first.path)
 }
 
@@ -204,10 +208,19 @@ fn read_repository_config(cwd: &Path) -> Result<RepositoryConfigSnapshot> {
     Ok(snapshot)
 }
 
-fn read_remote_head(common_dir: &Path, remote: &str) -> Option<String> {
-    // Only exists after a clone or remote set-head; missing just means no opinion.
-    let path = common_dir.join("refs").join("remotes").join(remote).join("HEAD");
-    let text = fs::read_to_string(path).ok()?;
-    let prefix = format!("ref: refs/remotes/{remote}/");
-    text.trim().strip_prefix(&prefix).map(ToOwned::to_owned)
+fn read_remote_head(cwd: &Path, remote: &str) -> Result<Option<String>> {
+    // Asked of Git rather than read from disk: under reftable there is no loose file.
+    // Only set after a clone or remote set-head; missing just means no opinion.
+    let result = run_git_with(
+        cwd,
+        &["symbolic-ref", "--quiet", &format!("refs/remotes/{remote}/HEAD")],
+        RunOptions {
+            accepted_statuses: &[0, 1, 128],
+            ..RunOptions::default()
+        },
+    )?;
+    let prefix = format!("refs/remotes/{remote}/");
+    Ok(decode_stdout(&result)
+        .strip_prefix(&prefix)
+        .map(ToOwned::to_owned))
 }

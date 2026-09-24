@@ -46,20 +46,23 @@ pub fn list_refs(cwd: &Path) -> Result<Vec<GitRef>> {
             "refs/remotes",
         ],
     )?;
-    let remotes = run_git(cwd, &["remote"])?;
-    let names = String::from_utf8_lossy(&remotes.stdout);
+    let remotes = list_remotes(cwd)?;
     Ok(parse_refs_with_remotes(
         &result.stdout,
-        &names.lines().collect::<Vec<_>>(),
+        &remotes.iter().map(String::as_str).collect::<Vec<_>>(),
     ))
+}
+
+pub fn list_remotes(cwd: &Path) -> Result<Vec<String>> {
+    let result = run_git(cwd, &["remote"])?;
+    Ok(String::from_utf8_lossy(&result.stdout)
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 /// Parses `for-each-ref` output: NUL-separated name, object id, and upstream per ref, with a
 /// newline between refs that lands at the start of the next name.
-pub fn parse_refs(buffer: &[u8]) -> Vec<GitRef> {
-    parse_refs_with_remotes(buffer, &[])
-}
-
 fn parse_refs_with_remotes(buffer: &[u8], remotes: &[&str]) -> Vec<GitRef> {
     let values: Vec<String> = buffer
         .split(|byte| *byte == 0)
@@ -127,7 +130,8 @@ pub fn validate_branch_name(cwd: &Path, branch: &str) -> Result<bool> {
             ..RunOptions::default()
         },
     )?;
-    Ok(result.status == 0)
+    // `--branch` expands shorthands like `@{-1}` to another branch's name; only a literal name is valid.
+    Ok(result.status == 0 && decode_stdout(&result) == branch)
 }
 
 pub fn resolve_oid(cwd: &Path, reference: &str) -> Result<Option<String>> {
@@ -164,7 +168,7 @@ mod tests {
     fn parses_local_and_remote_refs() {
         let input =
             b"refs/heads/main\0abc\0refs/remotes/origin/main\0\nrefs/remotes/origin/feature/x\0def\0\0";
-        let refs = parse_refs(input);
+        let refs = parse_refs_with_remotes(input, &["origin"]);
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].short_name, "main");
         assert_eq!(refs[1].remote.as_deref(), Some("origin"));

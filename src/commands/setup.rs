@@ -10,54 +10,70 @@ use crate::state::config::{ensure_default_config_file, load_config};
 use crate::state::paths::config_path;
 use crate::ui::output::Renderer;
 use crate::ui::prompt::confirm;
-use crate::util::{ensure_directory, home_dir};
+use crate::util::{display_path, ensure_directory, home_dir};
 
 const START: &str = "# >>> acre >>>";
 const END: &str = "# <<< acre <<<";
+
+/// One startup file and the contents setup wants it to have.
+struct StartupFile {
+    path: PathBuf,
+    current: String,
+    next: String,
+}
+
+impl StartupFile {
+    fn read(path: PathBuf, snippet: &str) -> Result<Self> {
+        let current = read_startup_file(&path)?;
+        // Markers let a later run replace the block in place instead of appending a second copy.
+        let next = install_block(&current, &format!("{START}\n{snippet}\n{END}"));
+        Ok(Self { path, current, next })
+    }
+
+    fn changed(&self) -> bool {
+        self.next != self.current
+    }
+}
 
 pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -> Result<i32> {
     let renderer = Renderer::new(context);
     let shell = shell.unwrap_or_else(detect_shell);
     let rc = shell_config_path(shell);
-    // Markers let a later run replace the block in place instead of appending a second copy.
-    let desired = format!("{START}\n{}\n{END}", shell_snippet(shell));
-    let current = read_startup_file(&rc)?;
-    let next = install_block(&current, &desired);
-    let changed = next != current;
-    let login = (shell == SupportedShell::Bash).then(bash_login_path);
     // Read every destination before changing any file.
-    let login_contents = login.as_ref().map(|path| read_startup_file(path)).transpose()?;
-    let login_next = login_contents
-        .as_ref()
-        .map(|current| install_block(current, &desired));
-    let changed = changed || login_next != login_contents;
-    let approved = if changed {
-        // Nobody to ask when piped; proceed rather than hang.
-        yes || !context.interactive
-            || confirm(
-                &renderer,
-                &format!(
-                    "{} Acre shell integration in {}?",
-                    if current.contains(START) { "Update" } else { "Add" },
-                    rc.display()
-                ),
-                true,
-            )?
-    } else {
-        true
-    };
-    if approved && changed {
-        if let Some(parent) = rc.parent() {
-            ensure_directory(parent)?;
-        }
-        fs::write(&rc, next)
-            .map_err(|error| AcreError::io(format!("could not write {}", rc.display()), error))?;
+    let mut files = vec![StartupFile::read(rc.clone(), shell_snippet(shell))?];
+    let login = (shell == SupportedShell::Bash).then(bash_login_path);
+    if let Some(path) = &login {
+        files.push(StartupFile::read(path.clone(), BASH_LOGIN_SNIPPET)?);
     }
+    let changed: Vec<&StartupFile> = files.iter().filter(|file| file.changed()).collect();
+    let names = changed
+        .iter()
+        .map(|file| display_path(&file.path))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    // Update only when every changed file already has a block; anything new is an addition.
+    let verb = |past: bool| match (changed.iter().all(|file| file.current.contains(START)), past) {
+        (true, false) => "Update",
+        (true, true) => "Updated",
+        (false, false) => "Add",
+        (false, true) => "Added",
+    };
+    let approved = changed.is_empty()
+        // Nobody to ask when piped; proceed rather than hang.
+        || yes
+        || !context.interactive
+        || confirm(
+            &renderer,
+            &format!("{} Acre shell integration in {names}?", verb(false)),
+            true,
+        )?;
     if approved {
-        if let (Some(path), Some(next)) = (&login, login_next) {
-            if login_contents.as_ref() != Some(&next) {
-                fs::write(path, next)?;
+        for file in &changed {
+            if let Some(parent) = file.path.parent() {
+                ensure_directory(parent)?;
             }
+            fs::write(&file.path, &file.next)
+                .map_err(|error| AcreError::io(format!("could not write {}", file.path.display()), error))?;
         }
     }
     ensure_default_config_file()?;
@@ -67,7 +83,7 @@ pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -
             "ok": approved,
             "shell": shell,
             "shell_file": rc,
-            "shell_changed": changed && approved,
+            "shell_changed": !changed.is_empty() && approved,
             "login_shell_file": login,
             "acre_config": config_path(),
             "root": config.root,
@@ -78,26 +94,22 @@ pub fn run(context: &CommandContext, shell: Option<SupportedShell>, yes: bool) -
         renderer.line(format!("  Shell       <blue>{}</blue>", shell));
         renderer.line(format!(
             "  Config      <dim>{}</dim>",
-            renderer.value(config_path().display().to_string())
+            renderer.value(display_path(&config_path()))
         ));
         renderer.line(format!(
             "  Workspaces  <dim>{}</dim>",
-            renderer.value(config.root.display().to_string())
+            renderer.value(display_path(&config.root))
         ));
         renderer.line("");
         if !approved {
             renderer.line("<yellow>Shell integration was not changed.</yellow>");
-        } else if !changed {
+        } else if changed.is_empty() {
             renderer.line("<green>Shell integration is already current.</green>");
         } else {
             renderer.line(format!(
                 "<green>{} shell integration in {}.</green>",
-                if current.contains(START) {
-                    "Updated"
-                } else {
-                    "Added"
-                },
-                renderer.value(rc.display().to_string())
+                verb(true),
+                renderer.value(&names)
             ));
         }
         renderer.line("Restart this shell, then open existing work with <blue>acre</blue> or start new work with <blue>acre new feature/name</blue>.");
@@ -129,8 +141,20 @@ fn shell_config_path(shell: SupportedShell) -> PathBuf {
             .unwrap_or_else(|| home_dir().join(".config"))
             .join("fish/config.fish"),
         SupportedShell::Bash => home_dir().join(".bashrc"),
+        // pwsh's $PROFILE.CurrentUserCurrentHost: Documents on Windows (wherever it is redirected),
+        // the XDG config directory everywhere else.
         SupportedShell::Powershell => {
-            home_dir().join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1")
+            let base = if cfg!(windows) {
+                dirs::document_dir()
+                    .unwrap_or_else(|| home_dir().join("Documents"))
+                    .join("PowerShell")
+            } else {
+                std::env::var_os("XDG_CONFIG_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home_dir().join(".config"))
+                    .join("powershell")
+            };
+            base.join("Microsoft.PowerShell_profile.ps1")
         }
         SupportedShell::Zsh => std::env::var_os("ZDOTDIR")
             .map(PathBuf::from)
@@ -154,6 +178,11 @@ fn bash_login_path() -> PathBuf {
         .find(|path| path.exists())
         .unwrap_or_else(|| home_dir().join(".bash_profile"))
 }
+
+// Login files such as .profile are also read by dash and by bash as sh (POSIX mode), neither of
+// which can parse the bash integration.
+const BASH_LOGIN_SNIPPET: &str =
+    "if [ -n \"${BASH_VERSION:-}\" ] && ! shopt -oq posix; then eval \"$(acre shell init bash)\"; fi";
 
 fn shell_snippet(shell: SupportedShell) -> &'static str {
     match shell {

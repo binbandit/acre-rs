@@ -85,12 +85,20 @@ pub fn acquire(
 
 pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> Result<i32> {
     let config = load_config()?;
+    // Reported only if the lease turns up nowhere: it may be in the repository we couldn't read.
+    let mut unreadable = None;
     // A lease id says nothing about its repository, so search every one we've seen.
     for known in load_repository_index(&config)? {
         let Ok(repository) = discover_repository_from_common_dir(&known.common_dir) else {
             continue;
         };
-        let state = load_repository_state(&config, &repository)?;
+        let state = match load_repository_state(&config, &repository) {
+            Ok(state) => state,
+            Err(error) => {
+                unreadable.get_or_insert(error);
+                continue;
+            }
+        };
         if !state.leases.iter().any(|lease| lease.id == lease_id) {
             continue;
         }
@@ -102,10 +110,12 @@ pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> R
             .count();
         let mut retained = true;
         let mut pooled = false;
+        let mut external = false;
         let mut assessment = None;
+        let mut return_error = None;
         // The last lease out tries to return the workspace; others just let go.
         if !keep_active && remaining == 0 {
-            let result = return_workspace(
+            let returned = return_workspace(
                 &config,
                 &repository,
                 &workspace.id,
@@ -113,10 +123,17 @@ pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> R
                     allowed_session_id: None,
                     ignored_pids: vec![std::process::id()],
                 },
-            )?;
-            retained = !result.returned;
-            pooled = result.pooled;
-            assessment = Some(result.assessment);
+            );
+            // The lease is already gone, so a failed return is a retained workspace, not a failed release.
+            match returned {
+                Ok(result) => {
+                    retained = !result.returned;
+                    pooled = result.pooled;
+                    external = result.external;
+                    assessment = Some(result.assessment);
+                }
+                Err(error) => return_error = Some(error),
+            }
         }
         let renderer = Renderer::new(context);
         if context.global.json {
@@ -126,7 +143,12 @@ pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> R
                 "workspace": workspace.target.display_name,
                 "retained": retained,
                 "pooled": pooled,
+                "external": external,
                 "assessment": if retained { assessment.as_ref() } else { None },
+                "return_error": return_error.as_ref().map(|error| serde_json::json!({
+                    "code": error.code,
+                    "message": error.message,
+                })),
             }));
         } else {
             renderer.line(format!(
@@ -146,23 +168,29 @@ pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> R
                     "<dim>Workspace remains active · {remaining} other lease{}</dim>",
                     if remaining == 1 { "" } else { "s" }
                 ));
+            } else if external {
+                renderer.line("<dim>External worktree left untouched</dim>");
             } else {
                 renderer.line(
                     "<dim>Workspace remains active because Acre could not prove it safe to recycle</dim>",
                 );
-                if let Some(assessment) = &assessment {
-                    for reason in &assessment.reasons {
-                        renderer.line(format!("  <yellow>•</yellow> {}", renderer.value(reason)));
-                    }
+                let reasons = assessment
+                    .iter()
+                    .flat_map(|assessment| assessment.reasons.iter().cloned())
+                    .chain(return_error.iter().map(ToString::to_string));
+                for reason in reasons {
+                    renderer.line(format!("  <yellow>•</yellow> {}", renderer.value(reason)));
                 }
             }
         }
         return Ok(exit::SUCCESS);
     }
-    Err(AcreError::new(
-        "ACRE_LEASE_NOT_FOUND",
-        "That Acre lease was not found.",
-        exit::NOT_FOUND,
-    )
-    .with_details(serde_json::json!({ "leaseId": lease_id })))
+    Err(unreadable.unwrap_or_else(|| {
+        AcreError::new(
+            "ACRE_LEASE_NOT_FOUND",
+            "That Acre lease was not found.",
+            exit::NOT_FOUND,
+        )
+        .with_details(serde_json::json!({ "leaseId": lease_id }))
+    }))
 }

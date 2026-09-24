@@ -106,7 +106,8 @@ pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<P
             timeout: Some(std::time::Duration::from_secs(60)),
             ..RunOptions::default()
         },
-    )?;
+    )
+    .map_err(|error| provider_failure(error, selector, &repo_slug))?;
     let parsed: GhPullRequest = serde_json::from_slice(&result.stdout).map_err(|error| {
         AcreError::new(
             "ACRE_PR_INVALID_RESPONSE",
@@ -131,6 +132,30 @@ pub fn resolve_pull_request(repository: &Repository, selector: &str) -> Result<P
     })
 }
 
+/// Maps a failed `gh` run to the provider exit class, or to not-found when the PR doesn't exist.
+fn provider_failure(error: AcreError, selector: &str, repository: &str) -> AcreError {
+    // gh not installed stays an environment problem; the message already says what failed to start.
+    if error.code == "ACRE_PROCESS_START_FAILED" {
+        return error;
+    }
+    let missing = ["Could not resolve to a PullRequest", "no pull requests found"]
+        .iter()
+        .any(|needle| error.message.contains(needle));
+    if missing {
+        return AcreError::new(
+            "ACRE_TARGET_NOT_FOUND",
+            format!("{repository} has no pull request #{selector}."),
+            exit::NOT_FOUND,
+        )
+        .with_details(serde_json::json!({ "selector": selector, "provider": error.details }));
+    }
+    AcreError {
+        code: "ACRE_PR_LOOKUP_FAILED",
+        exit_code: exit::NETWORK,
+        ..error
+    }
+}
+
 pub fn ensure_pull_request_object(
     repository: &Repository,
     pull_request: &PullRequestTarget,
@@ -153,6 +178,12 @@ pub fn ensure_pull_request_object(
         remote,
         &format!("refs/pull/{}/head", pull_request.number),
         Some(&destination),
-    )?;
+    )
+    // A PR head that won't fetch is a provider or network problem, not a local Git one.
+    .map_err(|error| AcreError {
+        code: "ACRE_PR_FETCH_FAILED",
+        exit_code: exit::NETWORK,
+        ..error
+    })?;
     Ok(resolve_oid(&repository.top_level, &destination)?.unwrap_or_else(|| pull_request.head_oid.clone()))
 }
