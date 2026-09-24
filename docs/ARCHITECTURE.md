@@ -86,7 +86,7 @@ Git is authoritative for repository discovery, worktree registrations, refs, sta
 
 Acre state lives outside repositories under the configured root (default `~/.acre`). `ACRE_CONFIG` selects the configuration file. Relative roots are resolved against that configuration file's directory, so navigation does not change the store. Writes use a temporary file in the same directory, `sync_all`, atomic rename, and parent-directory sync where supported.
 
-Persisted state is reconstructable from Git worktree registrations and Acre-owned path boundaries. Recovered ownership is treated conservatively.
+Persisted state is reconstructable from Git worktree registrations and Acre-owned path boundaries. Recovered ownership is treated conservatively. A state file that exists but cannot be read is an error rather than an empty state; `acre system repair` sets it aside before reconstructing.
 
 ## No daemon
 

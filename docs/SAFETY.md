@@ -12,17 +12,17 @@ Only worktrees beneath Acre's configured repository `workspaces/` and `slots/` r
 
 ## No automatic repository execution
 
-Workspace preparation never runs package installation, build commands, checkout hooks, or code from `.acre.json`. Internal Git commands disable hooks and filesystem-monitor commands. Git still uses locally configured filters, including Git LFS; the local Git configuration must be trusted. Explicit commands such as `acre <target> -- <command>` and `acre config edit` run only when requested.
+Workspace preparation never runs package installation, build commands, checkout hooks, or code from `.acre.json`. Internal Git commands disable hooks and filesystem-monitor commands, ignore `GIT_DIR`, `GIT_WORK_TREE`, and the other repository-selecting variables Git exports to hooks, and never prompt for credentials. Git still uses locally configured filters, including Git LFS; the local Git configuration must be trusted. Explicit commands such as `acre <target> -- <command>` and `acre config edit` run only when requested.
 
 ## Return assessment
 
 Acre performs the assessment before mutation and, for the current shell, again after the shell has moved. Failure retains the workspace. The shell's actual directory determines whether it must move first, even when `-C` selects another directory.
 
-Tracked and untracked status comes from Git porcelain v2. Ignored state is listed separately with approved cache roots excluded. Unknown ignored data is blocked by default.
+Tracked and untracked status comes from Git porcelain v2. Ignored state is listed separately with approved cache roots excluded. Unknown ignored data is blocked by default. If Git reports anything while listing, such as a directory it cannot open, the listing is treated as incomplete and the workspace is retained.
 
 ## Seed file preservation
 
-Trusted seed paths are copied after the target is bound. Acre snapshots their content recursively. Any modification blocks return. Idle slots are scrubbed of all seed paths, preventing secret carry-over into untrusted targets. Copies are staged before publication; existing seed paths, including dangling symlinks, are preserved. Cache and seed operations do not follow symlinked parent directories.
+Trusted seed paths are copied after the target is bound. Acre snapshots their content recursively. Any modification blocks return. Idle slots are scrubbed of all ignored seed paths, including ones created in the workspace, preventing secret carry-over into untrusted targets. Copies are staged before publication; existing seed paths, including dangling symlinks, are preserved. Cache and seed operations do not follow symlinked parent directories.
 
 ## Pull requests
 
@@ -37,12 +37,16 @@ private temporary directories without holding that lock. A separate warming lock
 duplicate replenishers. Before publishing caches and making the slot idle, Acre reloads state
 and checks that the checkout is still untouched and unclaimed. An explicit open or manual edit
 preserves the checkout and discards the prepared copy. An interrupted preparation leaves a
-retained checkout, never an idle slot that could be recycled with incomplete caches.
+retained checkout, never an idle slot that could be recycled with incomplete caches. A
+preparation whose final check fails stops warming instead of creating another checkout;
+`acre system gc` removes such abandoned checkouts once they pass the idle-slot checks and no
+replenisher is running.
 
 ## Recovery bias
 
 When metadata is uncertain:
 
+- a state file that exists but cannot be read stops every command for that repository instead of being rebuilt over; `acre system repair` moves it aside, keeps it for inspection, and reconstructs from Git;
 - active Acre paths are reconstructed conservatively;
 - unknown ignored state blocks return;
 - missing Git registrations become broken records;

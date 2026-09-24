@@ -77,6 +77,6 @@ Closest matches:
   <blue>feature/refunds</blue>
   <blue>feature/refund-history</blue>
 
-Start new work explicitly:
+Start a new branch:
   <blue>acre new feature/refudns</blue>
 ```

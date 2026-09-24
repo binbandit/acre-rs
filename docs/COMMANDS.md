@@ -6,7 +6,7 @@
 -C, --directory <path>  run as though started in another directory
 --json                  emit one stable JSON document
 --no-color              disable ANSI colours
---plain                 use ASCII-only human output
+--plain                 no colour, ASCII symbols; names and paths print verbatim
 --verbose               retain underlying diagnostics in errors
 -V, --version           print version
 ```
@@ -69,7 +69,7 @@ The branch and commits are preserved.
 
 Creates config if absent and idempotently installs or upgrades a marked shell block.
 
-Bash setup installs integration into `.bashrc` and the active login profile (`.bash_profile`, `.bash_login`, or `.profile`). Zsh setup honors `ZDOTDIR`. Re-loading integration preserves the current shell session, while child shells receive their own session identities.
+Bash setup installs integration into `.bashrc` and the active login profile (`.bash_profile`, `.bash_login`, or `.profile`); the login block only runs under bash outside POSIX mode, so `sh` and `dash` can still read `.profile`. Zsh setup honors `ZDOTDIR`. PowerShell setup writes `$PROFILE.CurrentUserCurrentHost`: `Documents/PowerShell` on Windows, `~/.config/powershell` elsewhere. Re-loading integration preserves the current shell session, while child shells receive their own session identities.
 
 ## Machine commands
 
@@ -91,6 +91,8 @@ acre system repair
 acre system gc
 ```
 
+`doctor` exits non-zero only for failures (Git missing, unreadable configuration or state, broken records). An empty warm pool or running outside a repository is reported as a warning.
+
 ## Configuration commands
 
 ```text
@@ -101,6 +103,8 @@ acre config set <dotted-key> <json-or-string>
 acre config edit
 acre config repo-init [--force]
 ```
+
+Unknown configuration keys and duplicate paths are rejected rather than ignored. `config set root` always takes its value as a literal path. `config edit` runs `$VISUAL`, or `$EDITOR` when that is unset or empty, through the shell like Git does.
 
 ## Reserved names and explicit target types
 

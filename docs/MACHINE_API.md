@@ -53,7 +53,7 @@ Unknown targets without `--new` fail and never create a branch.
 acre --json release --lease-id <id>
 ```
 
-Release always releases that exact lease. When it was the final lease, Acre attempts safe return. A retained workspace returns `ok: true`, `retained: true`, and the full safety assessment because lease release itself succeeded.
+Release always releases that exact lease. When it was the final lease, Acre attempts safe return. A retained workspace returns `ok: true`, `retained: true`, and the full safety assessment because lease release itself succeeded. If the return attempt itself fails, `return_error` carries its `code` and `message` instead of an assessment. An external worktree is never returned and reports `external: true`.
 
 ```bash
 acre --json release --lease-id <id> --keep-active
