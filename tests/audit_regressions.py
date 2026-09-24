@@ -238,7 +238,9 @@ def test_shell_initialization_is_repeatable():
         env = dict(f.env, PATH=str(bindir)+':'+f.env['PATH'])
         kind = Path(shell).name
         script = 'eval "$(acre shell init '+kind+')"\neval "$(acre shell init '+kind+')"\nacre --version\n'
-        p = f.cmd([shell, '-c', script], env=env, check=False)
+        # No startup files: the developer's own rc files are not part of what is being tested.
+        isolated = ['--noprofile', '--norc'] if kind == 'bash' else ['-f']
+        p = f.cmd([shell, *isolated, '-c', script], env=env, check=False)
         assert p.returncode == 0 and 'acre ' in p.stdout
         evidence[kind] = {'code':p.returncode,'stderr':p.stderr}
     return
@@ -524,9 +526,10 @@ def test_done_resume_updates_destination_lease_and_history():
     first_id = next(w['id'] for w in state['workspaces'] if Path(w['path']) == first)
     assert state['leases'][0]['workspaceId'] == first_id
     history = json.loads((Path(f.settings['root'])/'shells/audit-session.json').read_text())
-    assert Path(history['currentDirectory']) == first and Path(history['previousDirectory']) == second
+    # The returned workspace is an idle slot now; history must not lead the shell back into it.
+    assert Path(history['currentDirectory']) == first and Path(history['previousDirectory']) != second
     p,fields,_ = f.shell('-',cwd=first)
-    assert p.returncode == 0 and Path(fields[2].decode()) == second
+    assert len(fields) < 3 or Path(fields[2].decode()) != second
     return
 
 def test_standalone_completion_works():
@@ -539,7 +542,7 @@ def test_standalone_completion_works():
     (bindir/'acre').symlink_to(BINARY)
     env = dict(f.env,PATH=str(bindir)+':'+f.env['PATH'])
     # Stub only Zsh's renderer so completion values can be observed outside an interactive prompt.
-    command = 'compdef() { :; }; _describe() { print -l -- "${values[@]}"; }; source "$1"; words=(acre ma); CURRENT=2; _acre_completion'
+    command = 'compdef() { :; }; compadd() { print -l -- "${(@P)2}"; }; source "$1"; words=(acre ma); CURRENT=2; _acre_completion'
     p = f.cmd(['/bin/zsh','-f','-c',command,'zsh',path],env=env)
     assert 'main' in p.stdout.splitlines()
     direct = f.cmd([BINARY,'__complete','ma'])
@@ -605,7 +608,14 @@ def test_new_copies_report_actual_strategy():
     assert f.data('system','inspect')['state']['slots']==[]
     result = f.new()
     assert (Path(result['path'])/'node_modules/marker').read_text()=='copied from primary'
-    assert not result['reused'] and result['environment']['cloneMode'] in ['copy','reflink']
+    environment = result['environment']
+    assert not result['reused'] and environment['cloneMode'] in ['copy','reflink']
+    # A copy must be counted; a reflink claim with nothing counted is only honest for a real clone.
+    if environment['cloneMode'] == 'copy':
+        assert environment['clonedFiles'] == 1 and environment['clonedBytes'] == len('copied from primary')
+    if sys.platform == 'darwin':
+        apfs = subprocess.run(['/bin/df','-T','apfs',str(f.root)],capture_output=True).returncode == 0
+        assert environment['cloneMode'] == ('reflink' if apfs else 'copy')
     assert Path(result['environment']['source']) == f.repo
     return
 

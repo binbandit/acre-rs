@@ -6,7 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use acre::git::runner::run_git;
 use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -57,6 +56,7 @@ impl Fixture {
             .env_remove("ACRE_DIRECTIVE_FILE")
             .env_remove("ACRE_SHELL_PID")
             .args(args);
+        isolate_git(&mut command);
         command
     }
 
@@ -102,19 +102,38 @@ impl Fixture {
     }
 }
 
+/// Keeps the developer's Git setup out of the tests: no global or system config (signing,
+/// excludes, default branch), and no `GIT_DIR` and friends exported by a calling hook.
+pub fn isolate_git(command: &mut Command) -> &mut Command {
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+}
+
 pub fn git(cwd: &Path, args: &[&str]) {
-    run_git(cwd, args).unwrap_or_else(|error| panic!("git {args:?} failed: {error}"));
+    let output = isolate_git(Command::new("git").current_dir(cwd).args(args))
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 pub fn branch_exists(repo: &Path, branch: &str) -> bool {
-    run_git(
-        repo,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ],
-    )
-    .is_ok()
+    isolate_git(Command::new("git").current_dir(repo).args([
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("refs/heads/{branch}"),
+    ]))
+    .status()
+    .expect("run git")
+    .success()
 }

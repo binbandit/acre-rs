@@ -1,0 +1,2 @@
+# LF everywhere: rustfmt enforces Unix newlines, and Windows checkouts would otherwise get CRLF.
+* text=auto eol=lf
