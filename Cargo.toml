@@ -35,7 +35,7 @@ unicode-segmentation = "1.13.3"
 [dev-dependencies]
 assert_cmd = "2.2"
 predicates = "3.1"
-vt100 = "0.15"
+vt100 = "0.16"
 
 [lints.rust]
 unsafe_code = "deny"
