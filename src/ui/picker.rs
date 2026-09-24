@@ -186,12 +186,14 @@ fn format_line(renderer: &Renderer, parts: &[(&str, &str)], width: usize) -> Str
     if width == 0 {
         return String::new();
     }
+    // Measure what will actually be printed: plain mode widens `…` and `→` to several cells.
     let parts = parts
         .iter()
-        .map(|(style, value)| (*style, renderer.value(value)))
+        .map(|(style, value)| (*style, renderer.glyphs(&renderer.value(value))))
         .collect::<Vec<_>>();
+    let ellipsis: String = renderer.glyphs("…").chars().take(width).collect();
     let clipped = parts.iter().map(|(_, value)| value.width()).sum::<usize>() > width;
-    let mut remaining = width - usize::from(clipped);
+    let mut remaining = width.saturating_sub(if clipped { ellipsis.width() } else { 0 });
     let mut markup = String::new();
     for (style, value) in parts {
         let mut end = 0;
@@ -213,7 +215,7 @@ fn format_line(renderer: &Renderer, parts: &[(&str, &str)], width: usize) -> Str
         }
     }
     if clipped {
-        markup.push('…');
+        markup.push_str(&ellipsis);
     }
     renderer.format(&markup, true)
 }
@@ -237,6 +239,10 @@ mod tests {
     use crate::cli::{CommandContext, GlobalOptions, ShellBridge};
 
     fn renderer() -> Renderer {
+        renderer_with(false)
+    }
+
+    fn renderer_with(plain: bool) -> Renderer {
         Renderer::new(&CommandContext {
             cwd: Default::default(),
             interactive: true,
@@ -244,7 +250,7 @@ mod tests {
                 directory: None,
                 json: false,
                 no_color: true,
-                plain: false,
+                plain,
                 verbose: false,
             },
             shell: ShellBridge {
@@ -275,9 +281,43 @@ mod tests {
         selected: usize,
         size: (u16, u16),
     ) {
+        frame_with(&renderer(), terminal, rows, filter, selected, size);
+    }
+
+    fn frame_with(
+        renderer: &Renderer,
+        terminal: &mut vt100::Parser,
+        rows: &[PickerRow<()>],
+        filter: &str,
+        selected: usize,
+        size: (u16, u16),
+    ) {
         let mut output = Vec::new();
-        draw(&mut output, &renderer(), "repo", rows, filter, selected, size).unwrap();
+        draw(&mut output, renderer, "repo", rows, filter, selected, size).unwrap();
         terminal.process(&output);
+    }
+
+    #[test]
+    fn plain_frames_measure_ascii_glyphs_and_keep_user_text() {
+        let rows = rows(&["main", "fix/café", &format!("feature/{}", "x".repeat(80))]);
+        for (width, height) in [(60, 24), (49, 8), (20, 4), (2, 3)] {
+            let mut terminal = vt100::Parser::new(height, width, 0);
+            terminal.process(format!("\x1b[{height};1H").as_bytes());
+            frame_with(&renderer_with(true), &mut terminal, &rows, "", 1, (width, height));
+            let contents = terminal.screen().contents();
+            assert!(contents.is_ascii() || contents.contains("café"), "{contents}");
+            assert!(!contents.contains("\\u{"), "{contents}");
+            for row in 0..height {
+                assert!(
+                    !terminal.screen().row_wrapped(row),
+                    "{width}x{height}: {contents}"
+                );
+            }
+            assert_eq!(terminal.screen().cursor_position().1, 0);
+            if width >= 20 {
+                assert!(contents.contains("> fix/café"), "{contents}");
+            }
+        }
     }
 
     #[test]
@@ -383,7 +423,7 @@ mod tests {
             ("hello", 5, "hello"),
             ("hello", 1, "…"),
             ("hello", 0, ""),
-            ("<bold>\n", 20, "‹bold›\\x0a"),
+            ("<bold>\n", 20, "<bold>\\x0a"),
         ] {
             assert_eq!(format_line(&renderer, &[("blue", text)], width), expected);
         }

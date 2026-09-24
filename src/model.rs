@@ -214,9 +214,13 @@ pub struct ShellSessionState {
     pub updated_at: String,
 }
 
+// Unknown keys are rejected: a typo like `maxSlot` would otherwise be silently ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct AcreConfig {
+    /// Editor schema hint, kept so `config set` doesn't drop it.
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     pub schema_version: u32,
     pub root: PathBuf,
     pub pool: PoolConfig,
@@ -225,7 +229,7 @@ pub struct AcreConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct PoolConfig {
     pub min_slots: usize,
     pub max_slots: usize,
@@ -234,7 +238,7 @@ pub struct PoolConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct EnvironmentConfig {
     pub cache_roots: Vec<String>,
     pub required_roots: Vec<String>,
@@ -263,7 +267,7 @@ pub struct RepoEnvironmentConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct SafetyConfig {
     pub detect_processes: bool,
     pub block_unknown_ignored_files: bool,

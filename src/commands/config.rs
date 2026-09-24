@@ -14,7 +14,7 @@ pub fn show(context: &CommandContext) -> Result<i32> {
     let config = load_config()?;
     let renderer = Renderer::new(context);
     if context.global.json {
-        renderer.json(&config);
+        renderer.json(&serde_json::json!({ "ok": true, "config": config }));
     } else {
         renderer.raw(format!("{}\n", serde_json::to_string_pretty(&config)?));
     }
@@ -81,30 +81,43 @@ pub fn edit(context: &CommandContext) -> Result<i32> {
     if !target.exists() {
         save_config(&AcreConfig::default())?;
     }
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .map_err(|_| {
+    // Like git: an empty $VISUAL falls through to $EDITOR.
+    let editor = ["VISUAL", "EDITOR"]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
             AcreError::new(
                 "ACRE_EDITOR_NOT_CONFIGURED",
                 "Set $VISUAL or $EDITOR before using acre config edit.",
                 exit::ENVIRONMENT,
             )
         })?;
-    // $EDITOR may carry flags ("code --wait"); split on unquoted whitespace.
-    let mut pieces = split_command(&editor);
-    let program = pieces.first().cloned().unwrap_or(editor);
-    if !pieces.is_empty() {
-        pieces.remove(0);
-    }
-    let status = Command::new(program)
-        .args(pieces)
-        .arg(target)
+    let status = editor_command(&editor, &target)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
         .map_err(|error| AcreError::io("could not start editor", error))?;
     Ok(status.code().unwrap_or(exit::INTERNAL))
+}
+
+/// Runs the editor the way git does: through the shell, so quoting and flags ("code --wait")
+/// mean what they mean at a prompt, with the file passed as a separate argument.
+fn editor_command(editor: &str, file: &std::path::Path) -> Command {
+    let mut command;
+    #[cfg(unix)]
+    {
+        command = Command::new("sh");
+        command.arg("-c").arg(format!("{editor} \"$@\"")).arg(editor);
+    }
+    #[cfg(windows)]
+    {
+        command = Command::new("cmd");
+        command.arg("/C").arg(editor);
+    }
+    command.arg(file);
+    command
 }
 
 pub fn repo_init(context: &CommandContext, force: bool) -> Result<i32> {
@@ -126,26 +139,4 @@ pub fn repo_init(context: &CommandContext, force: bool) -> Result<i32> {
         renderer.line(format!("<green>Created</green> <dim>{}</dim>", target.display()));
     }
     Ok(exit::SUCCESS)
-}
-
-fn split_command(value: &str) -> Vec<String> {
-    let mut output = Vec::new();
-    let mut current = String::new();
-    let mut quoted = false;
-    for character in value.chars() {
-        match character {
-            // Just enough quoting for a path with spaces; not a full shell parser on purpose.
-            '"' => quoted = !quoted,
-            character if character.is_whitespace() && !quoted => {
-                if !current.is_empty() {
-                    output.push(std::mem::take(&mut current));
-                }
-            }
-            _ => current.push(character),
-        }
-    }
-    if !current.is_empty() {
-        output.push(current);
-    }
-    output
 }

@@ -81,7 +81,8 @@ pub fn is_inside(parent: &Path, child: &Path) -> bool {
 
 pub fn display_path(path: &Path) -> String {
     let absolute = canonical_or_absolute(path);
-    let home = home_dir();
+    // Canonical on both sides, or a symlinked HOME never matches its resolved paths.
+    let home = canonical_or_absolute(&home_dir());
     if absolute == home {
         return "~".to_owned();
     }

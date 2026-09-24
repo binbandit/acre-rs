@@ -17,10 +17,15 @@ pub fn render_failure(context: &CommandContext, error: &AcreError) -> i32 {
         }));
         return error.exit_code;
     }
+    // Git and gh write multi-line messages; the headline is the first line, the rest reads as-is.
+    let mut lines = error.message.lines();
     renderer.error(format!(
         "<bold><red>{}</red></bold>",
-        renderer.value(&error.message)
+        renderer.value(lines.next().unwrap_or_default())
     ));
+    for line in lines {
+        renderer.error(renderer.value(line));
+    }
     if let Some(suggestions) = error
         .details
         .get("suggestions")
@@ -49,7 +54,8 @@ pub fn render_failure(context: &CommandContext, error: &AcreError) -> i32 {
         }
     }
     // The one place we suggest creating a branch: an unknown target is never created silently.
-    if error.code == "ACRE_TARGET_NOT_FOUND" {
+    // A pull request the provider couldn't find is not a branch name to create.
+    if error.code == "ACRE_TARGET_NOT_FOUND" && error.details.get("provider").is_none() {
         let selector = error
             .details
             .get("selector")

@@ -4,7 +4,7 @@ use crate::model::TargetKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
+use crate::error::{AcreError, Result, exit};
 use crate::git::repository::{Repository, discover_repository};
 use crate::git::worktrees::GitWorktree;
 use crate::model::{
@@ -17,7 +17,7 @@ use crate::state::storage::{read_json, write_json};
 use crate::util::{canonical_or_absolute, is_inside, now_iso, short_hash};
 
 pub fn load_repository_state(config: &AcreConfig, repository: &Repository) -> Result<RepositoryState> {
-    let state = match stored_repository_state(config, repository) {
+    let state = match stored_repository_state(config, repository)? {
         Some(state) => reconcile_state(state, &repository.worktrees),
         None => empty_state(repository),
     };
@@ -25,19 +25,64 @@ pub fn load_repository_state(config: &AcreConfig, repository: &Repository) -> Re
 }
 
 /// The state persisted for this repository, before reconciliation and recovery.
-pub fn stored_repository_state(config: &AcreConfig, repository: &Repository) -> Option<RepositoryState> {
-    read_json::<RepositoryState>(&repository_state_path(config, repository))
-        // A corrupt state file reads as no state; recovery rebuilds what it can from git.
-        .unwrap_or_default()
-        .filter(|state| state.schema_version == 1 && state.repository_common_dir == repository.common_dir)
-        .map(|mut state| {
+///
+/// A file that exists but cannot be read is an error, never "no state": saving over it would
+/// drop live leases and trust records, or a newer Acre's data. `acre system repair` sets it aside.
+pub fn stored_repository_state(
+    config: &AcreConfig,
+    repository: &Repository,
+) -> Result<Option<RepositoryState>> {
+    let path = repository_state_path(config, repository);
+    let state =
+        read_json::<RepositoryState>(&path).map_err(|error| unreadable_state(&path, &error.message))?;
+    match state {
+        Some(state) if state.schema_version != 1 => Err(unreadable_state(
+            &path,
+            &format!("unsupported schema version {}", state.schema_version),
+        )),
+        // Another repository's state in a legacy directory: not ours to read.
+        Some(state) if state.repository_common_dir != repository.common_dir => Ok(None),
+        Some(mut state) => {
             state.repository_id.clone_from(&repository.id);
             state.repository_name.clone_from(&repository.name);
             for workspace in &mut state.workspaces {
                 workspace.repository_id.clone_from(&repository.id);
             }
-            state
-        })
+            Ok(Some(state))
+        }
+        None => Ok(None),
+    }
+}
+
+fn unreadable_state(path: &Path, reason: &str) -> AcreError {
+    AcreError::new(
+        STATE_UNREADABLE,
+        format!("Acre state for this repository could not be read: {reason}"),
+        exit::ENVIRONMENT,
+    )
+    .with_details(serde_json::json!({ "path": path, "hint": "acre system repair" }))
+}
+
+const STATE_UNREADABLE: &str = "ACRE_STATE_UNREADABLE";
+
+/// Moves an unreadable state file aside so recovery can rebuild from Git, keeping the original
+/// for inspection. Returns where it went, or `None` when the state was readable.
+pub fn quarantine_unreadable_state(config: &AcreConfig, repository: &Repository) -> Result<Option<PathBuf>> {
+    let _lock = RepositoryLock::acquire(&repository_lock_path(config, repository))?;
+    match stored_repository_state(config, repository) {
+        Err(error) if error.code == STATE_UNREADABLE => {
+            let path = repository_state_path(config, repository);
+            let destination = path.with_file_name(format!(
+                "state.unreadable-{}.json",
+                now_iso().replace([':', '.'], "-")
+            ));
+            std::fs::rename(&path, &destination)
+                .map_err(|error| AcreError::io(format!("could not move {} aside", path.display()), error))?;
+            Ok(Some(destination))
+        }
+        Err(error) => Err(error),
+        Ok(_) => Ok(None),
+    }
 }
 
 pub fn save_repository_state(

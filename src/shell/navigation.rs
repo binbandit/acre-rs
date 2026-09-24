@@ -55,7 +55,7 @@ pub fn navigate_direct(
             "hint": "acre setup",
         })));
     }
-    record_shell_move(context, config, &std::env::current_dir()?, destination, false)?;
+    record_shell_move(context, config, &shell_directory(context), destination, false)?;
     let renderer = Renderer::new(context);
     renderer.line(format!(
         "<green>→</green> <bold><blue>{}</blue></bold>",
@@ -69,6 +69,12 @@ pub fn navigate_direct(
         ));
     }
     write_cd_directive(context, destination)
+}
+
+/// Where the calling shell stands. A directory deleted out from under it has no current path, so
+/// fall back to where the command was aimed rather than failing after the summary was printed.
+pub fn shell_directory(context: &CommandContext) -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| context.cwd.clone())
 }
 
 /// Keep navigation responsive when another operation holds a repository lock. History is

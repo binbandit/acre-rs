@@ -16,6 +16,7 @@ use crate::util::validate_relative_path;
 impl Default for AcreConfig {
     fn default() -> Self {
         Self {
+            schema: None,
             schema_version: 1,
             root: default_acre_root(),
             pool: PoolConfig::default(),
@@ -58,7 +59,13 @@ impl Default for SafetyConfig {
 
 /// The user's configuration over the defaults; a missing file means all defaults.
 pub fn load_config() -> Result<AcreConfig> {
-    let config = read_json::<AcreConfig>(&config_path())?.unwrap_or_default();
+    let config = read_json::<AcreConfig>(&config_path())
+        .map_err(|error| match error.code {
+            // A file that doesn't match the schema is a configuration mistake, not a broken disk.
+            "ACRE_JSON" => AcreError::new("ACRE_CONFIG_INVALID", error.message, exit::USAGE),
+            _ => error,
+        })?
+        .unwrap_or_default();
     validate_acre_config(&config)?;
     Ok(config)
 }
@@ -99,14 +106,24 @@ pub fn validate_acre_config(config: &AcreConfig) -> Result<()> {
     if config.pool.min_slots > config.pool.max_slots {
         return invalid("pool.minSlots cannot exceed pool.maxSlots.");
     }
+    let environment = &config.environment;
+    for (key, values) in [
+        ("environment.cacheRoots", &environment.cache_roots),
+        ("environment.requiredRoots", &environment.required_roots),
+        ("environment.seedFiles", &environment.seed_files),
+        ("environment.excludedRoots", &environment.excluded_roots),
+    ] {
+        if values.iter().collect::<std::collections::BTreeSet<_>>().len() != values.len() {
+            return invalid(format!("{key} lists the same path more than once."));
+        }
+    }
     validate_environment_paths(
-        config
-            .environment
+        environment
             .cache_roots
             .iter()
-            .chain(config.environment.required_roots.iter())
-            .chain(config.environment.seed_files.iter())
-            .chain(config.environment.excluded_roots.iter()),
+            .chain(environment.required_roots.iter())
+            .chain(environment.seed_files.iter())
+            .chain(environment.excluded_roots.iter()),
         "Acre configuration",
     )
 }
@@ -132,15 +149,15 @@ pub fn ensure_default_config_file() -> Result<()> {
 }
 
 pub fn set_config_value(config: &mut AcreConfig, key: &str, raw: &str) -> Result<Value> {
+    // A path is always taken literally: a directory named `2024` or `true` is still a path.
+    if key == "root" {
+        config.root = raw.into();
+        validate_acre_config(config)?;
+        return Ok(Value::String(raw.to_owned()));
+    }
     // Try JSON first so `true` and `[".env"]` parse; anything else is a plain string.
     let value = serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.to_owned()));
     match key {
-        "root" => {
-            config.root = value
-                .as_str()
-                .map(Into::into)
-                .ok_or_else(|| invalid_error("root must be a string."))?;
-        }
         "pool.minSlots" => config.pool.min_slots = as_usize(&value, key)?,
         "pool.maxSlots" => config.pool.max_slots = as_usize(&value, key)?,
         "pool.replenish" => config.pool.replenish = as_bool(&value, key)?,

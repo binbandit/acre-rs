@@ -11,6 +11,11 @@ const TAGS: &[(&str, &str)] = &[
     ("cyan", "\x1b[36m"),
 ];
 
+// Private-use stand-ins for literal angle brackets in user text. They can't be parsed as tags,
+// and rendering turns them back into the characters the user wrote.
+const LESS_THAN: char = '\u{E000}';
+const GREATER_THAN: char = '\u{E001}';
+
 pub fn escape_markup(value: &str) -> String {
     let mut output = String::new();
     for character in value.chars() {
@@ -18,11 +23,10 @@ pub fn escape_markup(value: &str) -> String {
         // Control characters in a branch name could drive the terminal; show them as escapes.
         if code <= 0x1f || (0x7f..=0x9f).contains(&code) {
             output.push_str(&format!("\\x{code:02x}"));
-        // Angle quotes keep user text from being parsed as our own tags.
         } else if character == '<' {
-            output.push('‹');
+            output.push(LESS_THAN);
         } else if character == '>' {
-            output.push('›');
+            output.push(GREATER_THAN);
         } else {
             output.push(character);
         }
@@ -82,7 +86,7 @@ pub fn render_markup(value: &str, color: bool) -> String {
     if color && !active.is_empty() {
         output.push_str("\x1b[0m");
     }
-    output
+    output.replace(LESS_THAN, "<").replace(GREATER_THAN, ">")
 }
 
 #[cfg(test)]
@@ -96,6 +100,10 @@ mod tests {
 
     #[test]
     fn escapes_control_and_markup() {
-        assert_eq!(escape_markup("<x>\n"), "‹x›\\x0a");
+        assert_eq!(render_markup(&escape_markup("<x>\n"), false), "<x>\\x0a");
+        assert_eq!(
+            render_markup(&format!("<bold>{}</bold>", escape_markup("feat<bold>")), true),
+            "\x1b[1mfeat<bold>\x1b[0m"
+        );
     }
 }

@@ -72,8 +72,9 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    // Hyphen values so `acre -` reaches the previous-location shortcut.
-    #[arg(value_name = "TARGET", allow_hyphen_values = true)]
+    // clap already reads a lone `-` as a value, so `acre -` needs no hyphen allowance, and a
+    // mistyped flag like `--jsn` stays a usage error instead of becoming a target lookup.
+    #[arg(value_name = "TARGET")]
     target: Option<String>,
 
     // Everything after `--` belongs to the user's command, flags included.

@@ -32,12 +32,15 @@ complete -c acre -f -a '(__acre_complete)'
 }
 "#
         .to_owned(),
+        // compadd, not _describe: `:` separates a description there, which would mangle `pr:`.
+        // compdef only exists after compinit; without it there is simply no completion.
         SupportedShell::Zsh => r#"_acre_completion() {
   local -a values
   values=("${(@f)$(command "${ACRE_EXECUTABLE:-${_acre_executable:-acre}}" __complete "${words[CURRENT]}" 2>/dev/null)}")
-  _describe 'acre target' values
+  values=(${values:#})
+  compadd -a values
 }
-compdef _acre_completion acre
+(( $+functions[compdef] )) && compdef _acre_completion acre
 "#
         .to_owned(),
         SupportedShell::Bash => r#"_acre_completion() {
@@ -117,7 +120,7 @@ acre() {{
         builtin cd -- "$_acre_path" || _acre_status=$?
         if [ "$_acre_status" -eq 194 ]; then _acre_status=0; fi
         if [ "$_acre_status" -eq 0 ]; then
-          : > "$_acre_file"
+          : >| "$_acre_file"
           if ACRE_DIRECTIVE_FILE="$_acre_file" ACRE_SHELL_SESSION_ID="$ACRE_SHELL_SESSION_ID" ACRE_SHELL_PID="$$" command "$_acre_executable" __resume "$_acre_token"; then
             _acre_status=0
           else
@@ -189,22 +192,28 @@ function global:acre {{
   param([Parameter(ValueFromRemainingArguments = $true)][string[]]$AcreArgs)
   $file = Join-Path ([IO.Path]::GetTempPath()) ('acre-directive-' + [guid]::NewGuid().ToString('N'))
   [IO.File]::WriteAllBytes($file, [byte[]]@())
+  $code = 3
+  # Scoped to this call: left in the session, a later direct run would think the wrapper is listening.
   $env:ACRE_DIRECTIVE_FILE = $file
   $env:ACRE_SHELL_PID = [string]$PID
-  & $script:AcreExecutable @AcreArgs
-  $code = $LASTEXITCODE
-  if ((Test-Path $file) -and (Get-Item $file).Length -gt 0 -and ($code -eq 0 -or $code -eq 194)) {{
-    $fields = ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($file))).Split([char]0, [StringSplitOptions]::RemoveEmptyEntries)
-    if ($fields[0] -eq 'acre-directive-v1') {{
-      if ($fields[1] -eq 'cd' -and $code -eq 0) {{ Set-Location -LiteralPath $fields[2] }}
-      elseif ($fields[1] -eq 'resume-after-cd' -and $code -eq 194) {{
-        Set-Location -LiteralPath $fields[2]
-        & $script:AcreExecutable __resume $fields[3]
-        $code = $LASTEXITCODE
+  try {{
+    & $script:AcreExecutable @AcreArgs
+    $code = $LASTEXITCODE
+    if ((Test-Path $file) -and (Get-Item $file).Length -gt 0 -and ($code -eq 0 -or $code -eq 194)) {{
+      $fields = ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($file))).Split([char]0, [StringSplitOptions]::RemoveEmptyEntries)
+      if ($fields[0] -eq 'acre-directive-v1') {{
+        if ($fields[1] -eq 'cd' -and $code -eq 0) {{ Set-Location -LiteralPath $fields[2] }}
+        elseif ($fields[1] -eq 'resume-after-cd' -and $code -eq 194) {{
+          Set-Location -LiteralPath $fields[2]
+          & $script:AcreExecutable __resume $fields[3]
+          $code = $LASTEXITCODE
+        }}
       }}
     }}
+  }} finally {{
+    Remove-Item -Path Env:ACRE_DIRECTIVE_FILE, Env:ACRE_SHELL_PID -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
   }}
-  Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
   $global:LASTEXITCODE = $code
 }}
 

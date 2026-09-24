@@ -29,6 +29,9 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_atomic(path, &bytes)
 }
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    // Replace what a symlink points at, not the link: a config kept in a dotfiles repo stays there.
+    let resolved = fs::canonicalize(path).ok();
+    let path = resolved.as_deref().unwrap_or(path);
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -43,6 +46,14 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     })?;
     file.write_all(bytes)
         .map_err(|error| AcreError::io(format!("could not write {}", path.display()), error))?;
+    // An existing file keeps its mode; new files stay owner-only.
+    if let Ok(existing) = fs::metadata(path) {
+        file.as_file()
+            .set_permissions(existing.permissions())
+            .map_err(|error| {
+                AcreError::io(format!("could not set permissions on {}", path.display()), error)
+            })?;
+    }
     // Flush the data before the rename, or a crash could leave a complete-looking empty file.
     file.as_file()
         .sync_all()

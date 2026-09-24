@@ -60,23 +60,32 @@ impl Renderer {
 
     pub fn format(&self, markup: &str, tty: bool) -> String {
         // The caller says whether its stream is a tty; a pipe never gets escape codes.
-        let text = render_markup(markup, self.color && tty);
+        self.glyphs(&render_markup(markup, self.color && tty))
+    }
+
+    /// In plain mode, swaps Acre's own decorative symbols for ASCII. User text such as paths and
+    /// branch names passes through unchanged, so printed commands still work when pasted.
+    pub fn glyphs(&self, text: &str) -> String {
         if !self.plain {
-            return text;
+            return text.to_owned();
         }
-        let mut ascii = String::new();
+        let mut ascii = String::with_capacity(text.len());
         for character in text.chars() {
             match character {
                 '→' => ascii.push_str("->"),
                 '←' => ascii.push_str("<-"),
+                '›' => ascii.push('>'),
+                '‹' => ascii.push('<'),
+                '↑' => ascii.push('^'),
+                '↓' => ascii.push('v'),
                 '·' | '•' => ascii.push('-'),
                 '’' | '‘' => ascii.push('\''),
                 '“' | '”' => ascii.push('"'),
                 '…' => ascii.push_str("..."),
-                '✓' => ascii.push_str("ok"),
+                // One cell each, like the symbols they replace, so status columns stay aligned.
+                '✓' => ascii.push('+'),
                 '✗' => ascii.push('x'),
-                value if value.is_ascii() => ascii.push(value),
-                value => ascii.extend(value.escape_unicode()),
+                value => ascii.push(value),
             }
         }
         ascii
