@@ -68,7 +68,7 @@ const STATE_UNREADABLE: &str = "ACRE_STATE_UNREADABLE";
 /// Moves an unreadable state file aside so recovery can rebuild from Git, keeping the original
 /// for inspection. Returns where it went, or `None` when the state was readable.
 pub fn quarantine_unreadable_state(config: &AcreConfig, repository: &Repository) -> Result<Option<PathBuf>> {
-    let _lock = RepositoryLock::acquire(&repository_lock_path(config, repository))?;
+    let _lock = RepositoryLock::try_acquire(&repository_lock_path(config, repository))?;
     match stored_repository_state(config, repository) {
         Err(error) if error.code == STATE_UNREADABLE => {
             let path = repository_state_path(config, repository);
@@ -197,7 +197,13 @@ pub struct LockedRepository {
 }
 
 impl LockedRepository {
+    /// Foreground operations report contention immediately.
     pub fn open(config: &AcreConfig, repository: &Repository) -> Result<Self> {
+        Self::try_open(config, repository)
+    }
+
+    /// Background replenishment can wait to publish work already prepared.
+    pub fn open_waiting(config: &AcreConfig, repository: &Repository) -> Result<Self> {
         let lock = RepositoryLock::acquire(&repository_lock_path(config, repository))?;
         Self::with_lock(config, repository, lock)
     }

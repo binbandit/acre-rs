@@ -59,7 +59,7 @@ pub fn warm_repository(
                     .map(|copy| (source, copy))
             });
 
-        let mut locked = LockedRepository::open(config, &repository)?;
+        let mut locked = LockedRepository::open_waiting(config, &repository)?;
         let Some(index) =
             locked.state.slots.iter().position(|candidate| {
                 candidate.id == slot.id && candidate.status == WorkspaceStatus::Retained
