@@ -123,6 +123,22 @@ acre --json acquire feature/new-work \
 
 See [the machine API reference](docs/MACHINE_API.md).
 
+## Agent skill
+
+Install Acre's agent skill with the [skills CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add binbandit/acre-rs --skill acre
+```
+
+Add `--global` to use it across projects, or `--agent codex` (or another supported agent) to choose where it is installed. The skill teaches agents how to select workspaces, manage leases, reuse environments, and handle safe-return refusals. It includes guidance for developing Acre itself. Install the Acre executable separately using the steps above.
+
+The skill lives in [`skills/acre/SKILL.md`](skills/acre/SKILL.md), with its supporting references bundled for installation outside this repository. To check discovery from a local checkout:
+
+```bash
+npx skills add . --list
+```
+
 ## Administrative commands
 
 ```bash
