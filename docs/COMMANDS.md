@@ -60,6 +60,22 @@ unlocked and registered worktree
 
 The branch and commits are preserved.
 
+## `acre clean`
+
+```text
+--base <branch>  check merges against an existing local or remote branch
+--dry-run        preview only (the default)
+-y, --yes        apply cleanup
+```
+
+Run from the primary checkout. The preview lists proposed actions and reasons for retained entries. `--yes` rechecks eligibility and applies cleanup without a prompt; `--dry-run` and `--yes` cannot be combined.
+
+Cleanup returns safely merged Acre-owned workspaces to the warm pool, removes missing Acre-owned worktree registrations and records, and deletes merged local branches, including branches already returned with `done`. It preserves the primary checkout, default and selected base branches, current workspace, external worktrees, and branches attached to retained workspaces. Dirty files, changed seeds, unknown ignored files, leases, locks, detached commits, and process use receive the same protections as `done`. A Git operation in any worktree blocks branch deletion.
+
+Merge detection requires commit ancestry. Squash merges, rebased equivalents, and closed but unmerged pull requests are retained. The base defaults to the locally recorded remote default branch, then the local default branch. Nothing is fetched or changed on a remote; run `git fetch --prune` first to refresh remote knowledge and remove obsolete remote-tracking refs. `--base main` explicitly checks against local main.
+
+JSON output contains `ok` and a `report` with `base`, `baseOid`, `dryRun`, `candidates`, `cleaned`, and `skipped`. Entries contain an action (`return-workspace`, `remove-stale-reference`, or `delete-branch`), description, optional path and branch, and a reason when skipped. A successful run may retain unsafe entries; consult `skipped` for details.
+
 ## `acre setup`
 
 ```text
@@ -108,7 +124,7 @@ Unknown configuration keys and duplicate paths are rejected rather than ignored.
 
 ## Reserved names and explicit target types
 
-The words `new`, `done`, `setup`, `system`, and `config` are command names. A branch with one of those exact names remains addressable with an explicit type:
+The words `new`, `done`, `clean`, `setup`, `system`, and `config` are command names. A branch with one of those exact names remains addressable with an explicit type:
 
 ```bash
 acre branch:done

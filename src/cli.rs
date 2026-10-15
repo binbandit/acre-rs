@@ -41,6 +41,7 @@ Daily use:
   acre new <branch>     create a branch in a warm workspace
   acre -                return to the previous exact location
   acre done             finish with the current workspace
+  acre clean            preview cleanup of merged work
   acre <target> -- CMD  run a command in an existing target
 
 Acre never runs repository setup scripts automatically and never recycles dirty or unverified work.";
@@ -89,6 +90,9 @@ enum Command {
 
     #[command(about = "Finish with a workspace and return Acre-owned infrastructure to the warm pool")]
     Done(DoneArgs),
+
+    #[command(about = "Preview cleanup of merged workspaces and local branches")]
+    Clean(CleanArgs),
 
     #[command(about = "Install shell integration and create the user configuration")]
     Setup(SetupArgs),
@@ -139,6 +143,19 @@ struct NewArgs {
 #[derive(Debug, Args)]
 struct DoneArgs {
     target: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct CleanArgs {
+    /// Branch to check for merged commits (defaults to the remote default branch, then local).
+    #[arg(long, value_name = "BRANCH")]
+    base: Option<String>,
+    /// Apply cleanup. Without this flag, only show a preview.
+    #[arg(short = 'y', long, conflicts_with = "dry_run")]
+    yes: bool,
+    /// Preview cleanup without changing workspaces or refs (the default).
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -302,6 +319,7 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
             commands::new::run(context, &args.branch, args.from.as_deref(), args.fresh, args.stay)
         }
         Some(Command::Done(args)) => commands::done::run(context, args.target.as_deref()),
+        Some(Command::Clean(args)) => commands::clean::run(context, args.base.as_deref(), args.yes),
         Some(Command::Setup(args)) => commands::setup::run(context, args.shell, args.yes),
         Some(Command::Acquire(args)) => commands::machine::acquire(
             context,

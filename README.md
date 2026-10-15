@@ -24,6 +24,7 @@ acre <target>
 acre new <branch>
 acre -
 acre done
+acre clean
 acre <target> -- <program> [args...]
 ```
 
@@ -32,6 +33,7 @@ acre <target> -- <program> [args...]
 - `acre new <branch>` is the only operation that creates a branch.
 - `acre -` returns to the previous exact location for the current shell.
 - `acre done` safely returns an Acre-owned workspace to the warm pool.
+- `acre clean` previews cleanup of merged workspaces, merged local branches, and missing Acre workspace references. Add `--yes` to apply it.
 - `acre <target> -- <program>` runs a command there without navigating.
 
 An unknown target is never silently turned into a new branch.
@@ -91,6 +93,8 @@ When `acre done` is safe, Acre preserves the branch and commits, detaches the wo
 Acre refuses recycling when it finds dirty work, an in-progress Git operation, changed seed files, unexplained ignored files, another lease, a process using the directory, or state it cannot prove safe.
 
 External worktrees created by Git, Worktrunk, Cursor, Claude, Codex, an IDE, or another tool are addressable but never moved, reset, removed, scrubbed, or pooled by Acre.
+
+Run `acre clean` from your primary checkout after merging work. It uses the locally recorded remote default branch, falling back to the local default branch; `--base main` selects a different merge destination. Fetch first if you need the latest remote state. Cleanup uses the same safety checks as `done`, keeps branches used by retained or external worktrees, and deletes only local branches whose commits are reachable from the base. Squash merges and other unproven merges are retained. Remote branches are never deleted.
 
 ## Environment generations
 

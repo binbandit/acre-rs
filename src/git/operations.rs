@@ -4,6 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::error::{AcreError, Result, exit};
+use crate::git::refs::GitRef;
 use crate::git::repository::Repository;
 use crate::git::runner::{ProcessResult, RunOptions, decode_stdout, run_git_with};
 use crate::model::{StoredTarget, TargetKind};
@@ -136,6 +137,25 @@ pub fn delete_branch_if_expected(repository: &Repository, branch: &str, expected
         },
     )?;
     Ok(result.status == 0)
+}
+
+/// The caller proved ancestry and checked worktree use under the repository lock. Verify
+/// both refs atomically so a concurrent commit or base rewrite cannot invalidate that proof.
+pub fn delete_merged_branch(repository: &Repository, branch: &GitRef, base: &GitRef) -> Result<()> {
+    let input = format!(
+        "start\noption no-deref\nverify {} {}\ndelete {} {}\nprepare\ncommit\n",
+        base.full_name, base.oid, branch.full_name, branch.oid
+    );
+    run_git_with(
+        &repository.top_level,
+        &["update-ref", "--stdin"],
+        RunOptions {
+            stdin: Some(input.into_bytes()),
+            timeout: Some(GIT_TIMEOUT),
+            ..RunOptions::default()
+        },
+    )?;
+    Ok(())
 }
 
 fn git(cwd: &Path, args: &[&str]) -> Result<ProcessResult> {

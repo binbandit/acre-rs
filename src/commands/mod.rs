@@ -1,5 +1,6 @@
 //! One handler per command. Handlers parse intent, call the workspace lifecycle, and render results.
 
+pub mod clean;
 pub mod config;
 pub mod done;
 pub mod internal;

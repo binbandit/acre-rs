@@ -160,6 +160,18 @@ pub fn ref_exists(cwd: &Path, reference: &str) -> Result<bool> {
     Ok(result.status == 0)
 }
 
+pub fn is_ancestor(cwd: &Path, head: &str, base: &str) -> Result<bool> {
+    let result = run_git_with(
+        cwd,
+        &["merge-base", "--is-ancestor", head, base],
+        RunOptions {
+            accepted_statuses: &[0, 1],
+            ..RunOptions::default()
+        },
+    )?;
+    Ok(result.status == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

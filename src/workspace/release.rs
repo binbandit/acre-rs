@@ -32,6 +32,15 @@ pub fn return_workspace(
     options: &AssessOptions,
 ) -> Result<ReturnResult> {
     let mut locked = LockedRepository::open(config, repository)?;
+    return_workspace_locked(config, &mut locked, workspace_id, options)
+}
+
+pub(crate) fn return_workspace_locked(
+    config: &AcreConfig,
+    locked: &mut LockedRepository,
+    workspace_id: &str,
+    options: &AssessOptions,
+) -> Result<ReturnResult> {
     let repository = locked.repository.clone();
     let state = &mut locked.state;
     let workspace = state

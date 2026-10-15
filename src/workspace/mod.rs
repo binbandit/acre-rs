@@ -4,6 +4,7 @@ use crate::error::{AcreError, exit};
 
 pub mod activate;
 pub mod assess;
+pub mod clean;
 pub mod lease;
 pub mod maintain;
 pub mod pool;

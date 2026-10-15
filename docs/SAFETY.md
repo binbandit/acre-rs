@@ -6,9 +6,11 @@ Acre's safety promise is narrower and stronger than a generic `--force` flag.
 
 Only worktrees beneath Acre's configured repository `workspaces/` and `slots/` roots can be Acre-owned. Existing worktrees discovered elsewhere are external and are never moved, reset, detached, removed, or recycled.
 
-## No branch deletion
+## Branch preservation and explicit cleanup
 
 `acre done` detaches a branch from a directory but never deletes the branch ref. Commits remain reachable through the branch exactly as before. Newly created detached commits block return until the user attaches them to a branch; recovered detached workspaces are also retained.
+
+`acre clean` previews cleanup; only `--yes` applies it. A local branch is eligible for deletion only when its tip is an ancestor of the selected base and it is no longer attached to a retained or external worktree. Default and base branches are protected. Ref deletion verifies both the branch tip and base tip in one Git transaction, refusing concurrent changes. Squash merges and closed pull requests are not sufficient evidence. Remote refs are never deleted. Workspace cleanup uses the return assessment and leaves the current workspace in place.
 
 ## No automatic repository execution
 
