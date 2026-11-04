@@ -119,10 +119,10 @@ pub fn render_materialized_summary(
     }
     if navigated {
         let mut details = Vec::new();
-        if let Ok(relative) = destination.strip_prefix(&result.path) {
-            if !relative.as_os_str().is_empty() {
-                details.push(relative.display().to_string());
-            }
+        if let Ok(relative) = destination.strip_prefix(&result.path)
+            && !relative.as_os_str().is_empty()
+        {
+            details.push(relative.display().to_string());
         }
         details.push(environment_label(result));
         details.push(format!("{} ms", result.elapsed_ms.max(1)));

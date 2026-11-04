@@ -98,20 +98,19 @@ pub fn record_shell_move(
     let previous = read_shell_state(config, session)?.and_then(|state| state.current_directory);
     let mut released = std::collections::BTreeSet::new();
     for source in previous.as_deref().into_iter().chain(std::iter::once(from)) {
-        if let Ok(repository) = discover_repository(source) {
-            if destination
+        if let Ok(repository) = discover_repository(source)
+            && destination
                 .as_ref()
                 .is_none_or(|target| target.common_dir != repository.common_dir)
-                && released.insert(repository.common_dir.clone())
-            {
-                let _ = release_shell_session_lease(config, &repository, session);
-            }
+            && released.insert(repository.common_dir.clone())
+        {
+            let _ = release_shell_session_lease(config, &repository, session);
         }
     }
-    if !destination_leased {
-        if let (Some(repository), Some(request)) = (destination, LeaseRequest::for_shell(&context.shell)) {
-            let _ = lease_workspace_by_path(config, &repository, to, &request);
-        }
+    if !destination_leased
+        && let (Some(repository), Some(request)) = (destination, LeaseRequest::for_shell(&context.shell))
+    {
+        let _ = lease_workspace_by_path(config, &repository, to, &request);
     }
     record_navigation(config, session, from, to, context.shell.pid)
 }

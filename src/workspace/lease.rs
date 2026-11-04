@@ -91,10 +91,10 @@ pub fn lease_workspace_by_path(
         .map(|workspace| workspace.id.clone());
     let before = locked.state.leases.len();
     let lease = workspace_id.map(|workspace_id| acquire(&mut locked.state, &workspace_id, request));
-    if lease.is_none() {
-        if let Some(session_id) = &request.session_id {
-            release_session(&mut locked.state, session_id, None);
-        }
+    if lease.is_none()
+        && let Some(session_id) = &request.session_id
+    {
+        release_session(&mut locked.state, session_id, None);
     }
     if lease.is_some() || locked.state.leases.len() != before {
         locked.save(config)?;

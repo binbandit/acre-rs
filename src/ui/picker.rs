@@ -237,6 +237,7 @@ fn visible_rows<'a, T>(rows: &'a [PickerRow<T>], filter: &str) -> Vec<&'a Picker
 mod tests {
     use super::*;
     use crate::cli::{CommandContext, GlobalOptions, ShellBridge};
+    use std::num::NonZeroU16;
 
     fn renderer() -> Renderer {
         renderer_with(false)
@@ -274,6 +275,11 @@ mod tests {
             .collect()
     }
 
+    fn terminal(rows: u16, cols: u16) -> vt100::Parser {
+        let size = |value| NonZeroU16::new(value).expect("test terminals have a size");
+        vt100::Parser::new(size(rows), size(cols), 0)
+    }
+
     fn frame(
         terminal: &mut vt100::Parser,
         rows: &[PickerRow<()>],
@@ -301,7 +307,7 @@ mod tests {
     fn plain_frames_measure_ascii_glyphs_and_keep_user_text() {
         let rows = rows(&["main", "fix/café", &format!("feature/{}", "x".repeat(80))]);
         for (width, height) in [(60, 24), (49, 8), (20, 4), (2, 3)] {
-            let mut terminal = vt100::Parser::new(height, width, 0);
+            let mut terminal = terminal(height, width);
             terminal.process(format!("\x1b[{height};1H").as_bytes());
             frame_with(&renderer_with(true), &mut terminal, &rows, "", 1, (width, height));
             let contents = terminal.screen().contents();
@@ -323,7 +329,7 @@ mod tests {
     #[test]
     fn raw_mode_frames_keep_rows_aligned_when_selecting_and_filtering() {
         let rows = rows(&["main", "feature/alpha", "feature/beta"]);
-        let mut terminal = vt100::Parser::new(24, 80, 0);
+        let mut terminal = terminal(24, 80);
         terminal.process(b"Prior shell output\r\n$ acre\r\n");
         for (filter, selected, expected_rows) in [
             (
@@ -366,7 +372,7 @@ mod tests {
             .collect::<Vec<_>>();
         let rows = rows(&labels.iter().map(String::as_str).collect::<Vec<_>>());
         for (width, height) in [(80, 24), (40, 8), (20, 4), (10, 2), (10, 1)] {
-            let mut terminal = vt100::Parser::new(height, width, 0);
+            let mut terminal = terminal(height, width);
             // Start at the bottom as a real shell often does.
             terminal.process(format!("\x1b[{height};1H").as_bytes());
             for selected in [0, 15, 29, 0] {
@@ -394,9 +400,9 @@ mod tests {
     #[test]
     fn resizing_redraws_from_the_origin_without_stale_rows() {
         let rows = rows(&["main", "feature/alpha", "feature/beta"]);
-        let mut terminal = vt100::Parser::new(24, 80, 0);
+        let mut terminal = terminal(24, 80);
         for (width, height) in [(80, 24), (20, 4), (40, 8), (80, 24)] {
-            terminal.set_size(height, width);
+            terminal.set_size(NonZeroU16::new(height).unwrap(), NonZeroU16::new(width).unwrap());
             frame(&mut terminal, &rows, "", 2, (width, height));
             let contents = terminal.screen().contents();
             assert_eq!(contents.matches("repo").count(), 1, "{contents}");

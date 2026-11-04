@@ -121,17 +121,17 @@ fn reconcile_state(mut state: RepositoryState, worktrees: &[GitWorktree]) -> Rep
             Some(worktree) if worktree.exists && !worktree.prunable => {
                 // Keep the original binding when detached: it is the baseline protecting
                 // new detached commits and lets `done <original-name>` report that refusal.
-                if let Some(branch) = &worktree.branch {
-                    if workspace.target.local_branch.as_ref() != Some(branch) {
-                        workspace.target = StoredTarget {
-                            kind: TargetKind::LocalBranch,
-                            display_name: branch.clone(),
-                            oid: worktree.head.clone(),
-                            local_branch: Some(branch.clone()),
-                            remote_branch: None,
-                            pull_request: None,
-                        };
-                    }
+                if let Some(branch) = &worktree.branch
+                    && workspace.target.local_branch.as_ref() != Some(branch)
+                {
+                    workspace.target = StoredTarget {
+                        kind: TargetKind::LocalBranch,
+                        display_name: branch.clone(),
+                        oid: worktree.head.clone(),
+                        local_branch: Some(branch.clone()),
+                        remote_branch: None,
+                        pull_request: None,
+                    };
                 }
             }
             _ => workspace.status = WorkspaceStatus::Broken,

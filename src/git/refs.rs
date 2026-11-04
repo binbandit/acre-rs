@@ -69,7 +69,9 @@ fn parse_refs_with_remotes(buffer: &[u8], remotes: &[&str]) -> Vec<GitRef> {
         .map(|value| String::from_utf8_lossy(value).into_owned())
         .collect();
     values
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .filter_map(|record| {
             let full_name = record[0].trim_start_matches(['\r', '\n']);
             let oid = record[1].as_str();

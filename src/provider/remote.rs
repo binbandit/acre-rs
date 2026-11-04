@@ -10,18 +10,18 @@ pub struct HostedRemote {
 pub fn parse_hosted_remote(remote_url: &str) -> Option<HostedRemote> {
     let sanitized = remote_url.trim().trim_end_matches('/').trim_end_matches(".git");
     // scp-style git@host:owner/repo has no scheme; handle it before the URL form.
-    if !sanitized.contains("://") {
-        if let Some((left, right)) = sanitized.split_once(':') {
-            let host = left.rsplit('@').next()?.to_owned();
-            let mut parts: Vec<&str> = right.split('/').filter(|part| !part.is_empty()).collect();
-            if parts.len() >= 2 {
-                let repo = parts.pop()?.to_owned();
-                return Some(HostedRemote {
-                    host,
-                    owner: parts.join("/"),
-                    repo,
-                });
-            }
+    if !sanitized.contains("://")
+        && let Some((left, right)) = sanitized.split_once(':')
+    {
+        let host = left.rsplit('@').next()?.to_owned();
+        let mut parts: Vec<&str> = right.split('/').filter(|part| !part.is_empty()).collect();
+        if parts.len() >= 2 {
+            let repo = parts.pop()?.to_owned();
+            return Some(HostedRemote {
+                host,
+                owner: parts.join("/"),
+                repo,
+            });
         }
     }
     let without_scheme = sanitized.split_once("://")?.1;

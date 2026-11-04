@@ -77,32 +77,31 @@ pub fn resolve_existing_target(
     let value = typed.value.as_str();
 
     // Only a bare selector can be a PR; `branch:pr:12` means a branch literally named that.
-    if typed.kind == SelectorKind::Auto {
-        if let Some(number) = parse_pull_request_selector(value) {
-            validate_pull_request_url(repository, value)?;
-            return pull_request_target(repository, state, number);
-        }
+    if typed.kind == SelectorKind::Auto
+        && let Some(number) = parse_pull_request_selector(value)
+    {
+        validate_pull_request_url(repository, value)?;
+        return pull_request_target(repository, state, number);
     }
     if let Some(target) = worktree_target(repository, state, &typed)? {
         return Ok(target);
     }
     let refs = list_refs(&repository.top_level)?;
     // `remote:` skips local branches on purpose: the user is asking for the remote's copy.
-    if matches!(typed.kind, SelectorKind::Auto | SelectorKind::Branch) {
-        if let Some(local) = refs
+    if matches!(typed.kind, SelectorKind::Auto | SelectorKind::Branch)
+        && let Some(local) = refs
             .iter()
             .find(|reference| reference.kind == GitRefKind::Local && reference.short_name == value)
-        {
-            return Ok(ResolvedTarget {
-                local_branch: Some(local.short_name.clone()),
-                ..ResolvedTarget::new(
-                    TargetKind::LocalBranch,
-                    &local.short_name,
-                    &local.oid,
-                    TrustLevel::Trusted,
-                )
-            });
-        }
+    {
+        return Ok(ResolvedTarget {
+            local_branch: Some(local.short_name.clone()),
+            ..ResolvedTarget::new(
+                TargetKind::LocalBranch,
+                &local.short_name,
+                &local.oid,
+                TrustLevel::Trusted,
+            )
+        });
     }
     if let Some(target) = remote_branch_target(&refs, &typed)? {
         return Ok(target);
@@ -130,14 +129,14 @@ fn pull_request_target(
                                 && validate_pull_request_url(repository, &pull_request.url).is_ok()))
                 })
     });
-    if let Some(existing) = held {
-        if let Some(worktree) = repository.worktree_at(&existing.path) {
-            return Ok(ResolvedTarget {
-                kind: TargetKind::Worktree,
-                existing_worktree: Some(worktree.clone()),
-                ..from_stored(&existing.target, existing.trust)
-            });
-        }
+    if let Some(existing) = held
+        && let Some(worktree) = repository.worktree_at(&existing.path)
+    {
+        return Ok(ResolvedTarget {
+            kind: TargetKind::Worktree,
+            existing_worktree: Some(worktree.clone()),
+            ..from_stored(&existing.target, existing.trust)
+        });
     }
     let mut pull_request = resolve_pull_request(repository, &number.to_string())?;
     let oid = ensure_pull_request_object(repository, &pull_request)?;

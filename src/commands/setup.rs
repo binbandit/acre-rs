@@ -194,11 +194,11 @@ fn shell_snippet(shell: SupportedShell) -> &'static str {
 }
 
 fn install_block(current: &str, desired: &str) -> String {
-    if let Some(start) = current.find(START) {
-        if let Some(relative_end) = current[start + START.len()..].find(END) {
-            let end = start + START.len() + relative_end + END.len();
-            return format!("{}{}{}", &current[..start], desired, &current[end..]);
-        }
+    if let Some(start) = current.find(START)
+        && let Some(relative_end) = current[start + START.len()..].find(END)
+    {
+        let end = start + START.len() + relative_end + END.len();
+        return format!("{}{}{}", &current[..start], desired, &current[end..]);
     }
     // Don't glue our block onto a file that lacks a final newline.
     let separator = if current.is_empty() || current.ends_with('\n') {

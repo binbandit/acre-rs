@@ -30,27 +30,26 @@ pub fn render_failure(context: &CommandContext, error: &AcreError) -> i32 {
         .details
         .get("suggestions")
         .and_then(serde_json::Value::as_array)
+        && !suggestions.is_empty()
     {
-        if !suggestions.is_empty() {
-            renderer.error("");
-            renderer.error("Closest matches:");
-            for suggestion in suggestions {
-                renderer.error(format!(
-                    "  <blue>{}</blue>",
-                    renderer.value(suggestion.as_str().unwrap_or_default())
-                ));
-            }
+        renderer.error("");
+        renderer.error("Closest matches:");
+        for suggestion in suggestions {
+            renderer.error(format!(
+                "  <blue>{}</blue>",
+                renderer.value(suggestion.as_str().unwrap_or_default())
+            ));
         }
     }
-    if let Some(matches) = error.details.get("matches").and_then(serde_json::Value::as_array) {
-        if !matches.is_empty() {
-            renderer.error("");
-            for candidate in matches {
-                renderer.error(format!(
-                    "  <blue>{}</blue>",
-                    renderer.value(candidate.as_str().unwrap_or_default())
-                ));
-            }
+    if let Some(matches) = error.details.get("matches").and_then(serde_json::Value::as_array)
+        && !matches.is_empty()
+    {
+        renderer.error("");
+        for candidate in matches {
+            renderer.error(format!(
+                "  <blue>{}</blue>",
+                renderer.value(candidate.as_str().unwrap_or_default())
+            ));
         }
     }
     // The one place we suggest creating a branch: an unknown target is never created silently.

@@ -86,10 +86,10 @@ pub fn display_path(path: &Path) -> String {
     if absolute == home {
         return "~".to_owned();
     }
-    if absolute.starts_with(&home) {
-        if let Ok(relative) = absolute.strip_prefix(&home) {
-            return format!("~/{}", relative.display());
-        }
+    if absolute.starts_with(&home)
+        && let Ok(relative) = absolute.strip_prefix(&home)
+    {
+        return format!("~/{}", relative.display());
     }
     absolute.display().to_string()
 }
