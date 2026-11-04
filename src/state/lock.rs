@@ -92,15 +92,19 @@ pub fn is_pid_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
+        // tasklist exits 0 whether or not the pid matched, printing its "no tasks" notice to stderr,
+        // so a successful run is judged by whether a row for exactly this pid came back. A CSV
+        // row reads `"image.exe","1234",...`; image names cannot contain a quote.
         let output = std::process::Command::new("tasklist")
-            // tasklist has no exit status worth trusting; look for the pid in its output instead.
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
             .output();
+        let pid = pid.to_string();
         output
             .map(|output| {
                 !output.status.success()
-                    || output.stdout.is_empty()
-                    || String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
+                    || String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .any(|row| row.split("\",\"").nth(1) == Some(pid.as_str()))
             })
             .unwrap_or(true)
     }
