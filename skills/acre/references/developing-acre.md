@@ -2,7 +2,7 @@
 
 Use this only when editing the Acre source repository. Paths below are relative to that checkout, not to the installed skill.
 
-Acre is one Rust executable crate. Start with the checkout's `README.md`, `docs/ARCHITECTURE.md`, and any applicable repository instructions. Requirements are Rust 1.85+ and Git 2.36+; respect `rust-toolchain.toml` when building and testing.
+Acre is one Rust executable crate. Start with the checkout's `README.md`, `docs/ARCHITECTURE.md`, and any applicable repository instructions. Requirements are Rust 1.99+ and Git 2.36+; respect `rust-toolchain.toml` when building and testing.
 
 ## Follow the ownership boundaries
 

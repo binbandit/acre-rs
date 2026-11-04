@@ -39,9 +39,9 @@ acre -C /path/to/repo --json system inspect
 
 User configuration can be updated with `acre config set <dotted-key> <json-or-string>`, for example `acre config set pool.maxSlots 6` when more concurrency is wanted. `pool.minSlots` must not exceed `pool.maxSlots`.
 
-For repository-specific environment rules, `acre -C /path/to/repo config repo-init` creates `.acre.json`. Read an existing file before editing it; do not force-overwrite it. Its `environment` object supports `cacheRoots`, `requiredRoots`, `seedFiles`, and `excludedRoots`. Use repository-relative paths and keep seed paths separate from cache paths. Cache roots can match nested projects too.
+For repository-specific environment rules, `acre -C /path/to/repo config repo-init` creates `.acre.json`. Read an existing file before editing it; do not force-overwrite it. Its `environment` object supports `cacheRoots`, `requiredRoots`, `outputRoots`, `seedFiles`, and `excludedRoots`. Use repository-relative paths and keep seed paths separate from cache and output paths. Roots match nested projects too, and a name such as `*.tsbuildinfo` matches by suffix.
 
-Add cache roots only for reproducible, disposable outputs. Do not approve a broad ignored directory containing user data or secrets just to make `done` succeed. Unknown keys, duplicate paths, and overlapping seed/cache paths are rejected. In automation use `config set` rather than interactive `config edit`.
+Cache roots are reusable dependency or build caches that are kept for the next branch. Output roots are build output that `done` deletes, such as `storybook-static`. Built-ins already cover `.next`, `next-env.d.ts`, `out`, `dist`, `coverage`, and `*.tsbuildinfo` in Node projects. Add either kind only for reproducible, disposable outputs. Do not approve a broad ignored directory containing user data or secrets just to make `done` succeed. Unknown keys, duplicate paths, and overlapping seed/cache paths are rejected. In automation use `config set` rather than interactive `config edit`.
 
 ## Diagnose a refusal
 
@@ -50,7 +50,7 @@ Start with the actual error or release assessment, then inspect the affected che
 | Evidence | Response |
 | --- | --- |
 | Dirty files or changed seeds | Preserve and report the changes. Finish them through the user's workflow or keep the workspace active. |
-| Unknown ignored files | Inspect the named data. Move/preserve needed files; approve a cache root only if it really is disposable output. |
+| Unknown ignored files | Inspect the named data. Move/preserve needed files; declare an output root only if it really is regenerable build output. |
 | Other leases | Let their owners finish. Release only your own IDs. |
 | Process use | Stop your task's processes and leave the directory. `-C` alone does not move a caller whose real working directory is still inside it. |
 | Merge/rebase/bisect or detached commits | Resolve the Git workflow or preserve commits on a branch. Do not silently abort an operation. |

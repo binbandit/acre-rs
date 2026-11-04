@@ -1,4 +1,5 @@
 [toolchain]
-channel = "1.85.1"
+channel = "1.99.1"
 profile = "minimal"
-components = ["rustfmt", "clippy"]
+# llvm-tools carries the libLLVM that rustc's rust-objcopy loads to strip release binaries on macOS.
+components = ["rustfmt", "clippy", "llvm-tools"]

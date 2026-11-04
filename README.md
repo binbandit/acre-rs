@@ -40,7 +40,7 @@ An unknown target is never silently turned into a new branch.
 
 ## Requirements
 
-- Rust 1.85 or newer
+- Rust 1.99 or newer
 - Git 2.36 or newer
 - `gh` only for `pr:<number>` and GitHub pull-request URLs
 
@@ -88,7 +88,7 @@ See [the work trial guide](docs/WORK_TRIAL.md) before using Acre against importa
 
 Acre keeps a small pool of detached reusable Git worktrees per repository. It fingerprints dependency generations from lockfiles and toolchain declarations, selects a compatible warm slot at its fixed directory, binds the requested target, reuses approved cache roots, and copies trusted local seed files only for trusted targets.
 
-When `acre done` is safe, Acre preserves the branch and commits, detaches the worktree, removes trusted seed copies, and returns the prepared environment to the pool.
+When `acre done` is safe, Acre preserves the branch and commits, detaches the worktree, removes trusted seed copies and build output such as `.next`, and returns the prepared environment to the pool.
 
 Acre refuses recycling when it finds dirty work, an in-progress Git operation, changed seed files, unexplained ignored files, another lease, a process using the directory, or state it cannot prove safe.
 
@@ -169,7 +169,7 @@ This repository is intentionally one Rust crate with clear internal modules rath
 ```text
 commands       one handler per command
 workspace      resolve targets, warm pool, activation, assessment, return, leases
-environment    fingerprints, cache roots, reflink seeding, seed-file integrity
+environment    fingerprints, cache roots, build output, reflink seeding, seed-file integrity
 git            the only Git process boundary
 state          atomic JSON, locks, repository state, sessions, pending operations
 shell          parent-shell directive protocol and generated integrations
