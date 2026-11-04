@@ -92,9 +92,10 @@ pub fn is_pid_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        // tasklist exits 0 whether or not the pid matched, printing its "no tasks" notice to stderr,
-        // so a successful run is judged by whether a row for exactly this pid came back. A CSV
-        // row reads `"image.exe","1234",...`; image names cannot contain a quote.
+        // tasklist's exit status does not say whether the pid matched, so a successful run is
+        // judged by whether a row for exactly this pid came back. A CSV row reads
+        // `"image.exe","1234",...`; image names cannot contain a quote. A failed run proves
+        // nothing, so the pid stays alive.
         let output = std::process::Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
             .output();
@@ -122,6 +123,34 @@ mod tests {
     fn pid_liveness_tracks_real_processes() {
         assert!(is_pid_alive(std::process::id()));
         assert!(!is_pid_alive(0));
+        // pid_t is signed, so no Unix process can have this pid.
+        #[cfg(unix)]
         assert!(!is_pid_alive(u32::MAX - 1));
+        // The open handle keeps Windows from giving this pid to another process before the check.
+        let mut exited = std::process::Command::new("git")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("start git");
+        exited.wait().expect("wait for git");
+        assert!(!is_pid_alive(exited.id()), "{}", alive_report(exited.id()));
+    }
+
+    /// Windows CI is the only place the tasklist path runs, so its failure says what tasklist said.
+    fn alive_report(pid: u32) -> String {
+        let mut report = format!("pid {pid} still reads as alive after exiting");
+        if cfg!(windows)
+            && let Ok(output) = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+                .output()
+        {
+            report.push_str(&format!(
+                "; tasklist {}: stdout {:?}, stderr {:?}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        report
     }
 }
