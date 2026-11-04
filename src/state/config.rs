@@ -42,6 +42,7 @@ impl Default for EnvironmentConfig {
         Self {
             cache_roots: Vec::new(),
             required_roots: Vec::new(),
+            output_roots: Vec::new(),
             seed_files: vec![".env".to_owned(), ".env.local".to_owned()],
             excluded_roots: Vec::new(),
         }
@@ -85,6 +86,7 @@ pub fn load_repo_config(repository_root: &Path) -> Result<RepoConfig> {
                 .cache_roots
                 .iter()
                 .chain(environment.required_roots.iter())
+                .chain(environment.output_roots.iter())
                 .chain(environment.seed_files.iter())
                 .chain(environment.excluded_roots.iter()),
             ".acre.json",
@@ -110,6 +112,7 @@ pub fn validate_acre_config(config: &AcreConfig) -> Result<()> {
     for (key, values) in [
         ("environment.cacheRoots", &environment.cache_roots),
         ("environment.requiredRoots", &environment.required_roots),
+        ("environment.outputRoots", &environment.output_roots),
         ("environment.seedFiles", &environment.seed_files),
         ("environment.excludedRoots", &environment.excluded_roots),
     ] {
@@ -122,6 +125,7 @@ pub fn validate_acre_config(config: &AcreConfig) -> Result<()> {
             .cache_roots
             .iter()
             .chain(environment.required_roots.iter())
+            .chain(environment.output_roots.iter())
             .chain(environment.seed_files.iter())
             .chain(environment.excluded_roots.iter()),
         "Acre configuration",
@@ -133,6 +137,7 @@ pub fn write_default_repo_config(path: &Path) -> Result<()> {
         environment: Some(RepoEnvironmentConfig {
             cache_roots: Vec::new(),
             required_roots: Vec::new(),
+            output_roots: Vec::new(),
             seed_files: vec![".env".to_owned(), ".env.local".to_owned()],
             excluded_roots: Vec::new(),
         }),
@@ -164,6 +169,7 @@ pub fn set_config_value(config: &mut AcreConfig, key: &str, raw: &str) -> Result
         "pool.idleRetentionDays" => config.pool.idle_retention_days = as_u64(&value, key)?,
         "environment.cacheRoots" => config.environment.cache_roots = as_strings(&value, key)?,
         "environment.requiredRoots" => config.environment.required_roots = as_strings(&value, key)?,
+        "environment.outputRoots" => config.environment.output_roots = as_strings(&value, key)?,
         "environment.seedFiles" => config.environment.seed_files = as_strings(&value, key)?,
         "environment.excludedRoots" => config.environment.excluded_roots = as_strings(&value, key)?,
         "safety.detectProcesses" => config.safety.detect_processes = as_bool(&value, key)?,

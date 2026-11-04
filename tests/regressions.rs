@@ -393,7 +393,7 @@ fn fresh_copies_report_their_actual_source_and_strategy() {
         other => panic!("unexpected clone mode {other:?}: {result}"),
     }
     // The fixture keeps the repository and Acre's root on one volume, so on macOS the mode
-    // follows that volume's filesystem rather than whatever cp happened to do.
+    // follows that volume's filesystem rather than whatever the clone call happened to do.
     if cfg!(target_os = "macos") {
         let apfs = std::process::Command::new("/bin/df")
             .args(["-T", "apfs"])

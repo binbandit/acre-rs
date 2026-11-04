@@ -20,7 +20,7 @@ Workspace preparation never runs package installation, build commands, checkout 
 
 Acre performs the assessment before mutation and, for the current shell, again after the shell has moved. Failure retains the workspace. The shell's actual directory determines whether it must move first, even when `-C` selects another directory.
 
-Tracked and untracked status comes from Git porcelain v2. Ignored state is listed separately with approved cache roots excluded. Unknown ignored data is blocked by default. If Git reports anything while listing, such as a directory it cannot open, the listing is treated as incomplete and the workspace is retained.
+Tracked and untracked status comes from Git porcelain v2. Ignored state is listed separately with approved cache roots and build output excluded. Unknown ignored data is blocked by default. Build output is only what an ecosystem regenerates from the code, such as `.next` or `*.tsbuildinfo`, or what the user or repository declares in `outputRoots`; it is removed when the workspace returns to the pool, around any cache root inside it. Symlinked paths are never build output. If Git reports anything while listing, such as a directory it cannot open, the listing is treated as incomplete and the workspace is retained.
 
 ## Seed file preservation
 
@@ -55,7 +55,7 @@ When metadata is uncertain:
 - repair reports state rather than inventing branch identity;
 - data retention wins over pool capacity.
 
-Pool reuse, eviction, and garbage collection require an unlocked, detached, clean slot with known cache metadata, an unchanged recorded commit, no unknown ignored data, and no detected processes using the slot. Workspaces stay at their installation paths; opening an idle slot by path takes it out of the pool.
+Pool reuse, eviction, and garbage collection require an unlocked, detached, clean slot with known cache metadata, an unchanged recorded commit, no ignored data other than caches (build output in an idle slot counts as unknown), and no detected processes using the slot. When a slot is recycled for another generation, its old caches are moved into the repository's `trash` directory and deleted by a detached background process; `acre system gc` empties anything left there. Workspaces stay at their installation paths; opening an idle slot by path takes it out of the pool.
 
 Activation removes a slot from the persisted pool before changing files. If activation or its final state write fails, recovery retains the directory without trusting the old cache fingerprint. Legacy idle slots without a recorded commit remain unverified; explicitly reopen them, attach a branch if detached, and return them to establish a safe baseline.
 

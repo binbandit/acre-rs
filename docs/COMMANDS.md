@@ -58,7 +58,7 @@ no detectable process use
 unlocked and registered worktree
 ```
 
-The branch and commits are preserved.
+The branch and commits are preserved. Build output such as `.next` is not unknown data: a pooled workspace has it removed and keeps its caches. See [build output](ENVIRONMENTS.md#build-output).
 
 ## `acre clean`
 

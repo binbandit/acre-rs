@@ -125,6 +125,9 @@ enum Command {
     #[command(name = "__replenish", hide = true)]
     Replenish { common_dir: PathBuf },
 
+    #[command(name = "__purge", hide = true)]
+    Purge { common_dir: PathBuf },
+
     #[command(name = "__complete", hide = true)]
     Complete { token: Option<String> },
 }
@@ -353,6 +356,7 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
         Some(Command::SessionId) => commands::internal::session_id(context),
         Some(Command::Resume { token }) => commands::internal::resume(context, &token),
         Some(Command::Replenish { common_dir }) => commands::internal::replenish(context, &common_dir),
+        Some(Command::Purge { common_dir }) => commands::internal::purge(context, &common_dir),
         Some(Command::Complete { token }) => {
             commands::internal::complete(context, token.as_deref().unwrap_or(""))
         }

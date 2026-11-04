@@ -111,6 +111,7 @@ pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> R
         let mut retained = true;
         let mut pooled = false;
         let mut external = false;
+        let mut cleared_outputs = Vec::new();
         let mut assessment = None;
         let mut return_error = None;
         // The last lease out tries to return the workspace; others just let go.
@@ -130,6 +131,7 @@ pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> R
                     retained = !result.returned;
                     pooled = result.pooled;
                     external = result.external;
+                    cleared_outputs = result.cleared_outputs;
                     assessment = Some(result.assessment);
                 }
                 Err(error) => return_error = Some(error),
@@ -144,6 +146,7 @@ pub fn release(context: &CommandContext, lease_id: &str, keep_active: bool) -> R
                 "retained": retained,
                 "pooled": pooled,
                 "external": external,
+                "cleared_outputs": cleared_outputs,
                 "assessment": if retained { assessment.as_ref() } else { None },
                 "return_error": return_error.as_ref().map(|error| serde_json::json!({
                     "code": error.code,

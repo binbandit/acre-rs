@@ -52,16 +52,19 @@ This document uses semantic tags to describe intended terminal styling. The impl
 <bold><green>Finished with</green></bold> <blue>feature/refunds</blue>
 
 <dim>Branch and commits preserved</dim>
+<dim>Build output cleared: apps/web/.next, apps/web/next-env.d.ts</dim>
 <dim>Warm workspace returned to the pool</dim>
 ```
 
 ## Refused done
 
 ```text
-<bold><yellow>feature/refunds is still in use</yellow></bold>
+<bold><yellow>feature/refunds can't be returned yet</yellow></bold>
 
   2 modified
   1 untracked
+  ignored: .vercel/project.json
+  <dim>Delete these, or list build output under environment.outputRoots in .acre.json.</dim>
   changed local file: .env.local
   held by editor:zed
 

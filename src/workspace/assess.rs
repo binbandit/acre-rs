@@ -63,15 +63,15 @@ pub fn assess_workspace(
     let status = read_status(&workspace.path)?;
     let operation = in_progress_operation(&workspace.path)?;
     let registered = repository.worktree_at(&workspace.path);
+    // Build output belongs to the code checked out now, which may not be what was opened.
+    let reference = registered.map_or("HEAD", |worktree| worktree.head.as_str());
+    let plan = build_environment_plan(repository, reference, config)?;
     let cache_roots = match &workspace.environment {
         Some(environment) => environment.cache_roots.clone(),
-        // A recovered workspace carries no snapshot, so derive its approved roots from its checkout.
-        None => {
-            let reference = registered.map_or("HEAD", |worktree| worktree.head.as_str());
-            build_environment_plan(repository, reference, config)?.cache_roots
-        }
+        // A recovered workspace carries no snapshot, so its approved roots come from its checkout.
+        None => plan.cache_roots,
     };
-    let ignored = unknown_ignored_files(&workspace.path, &cache_roots)?;
+    let ignored = unknown_ignored_files(&workspace.path, &cache_roots, &plan.output_roots)?;
     let baseline: std::collections::BTreeSet<&str> =
         workspace.baseline_ignored.iter().map(String::as_str).collect();
     let new_ignored = ignored

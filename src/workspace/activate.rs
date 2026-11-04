@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use crate::environment::clone::{clear_cache_roots, prepare_environment};
+use crate::environment::clone::{discard_cache_roots, prepare_environment};
 use crate::environment::fingerprint::{EnvironmentPlan, build_environment_plan};
 use crate::environment::inspect::inspect_environment;
 use crate::environment::roots::unknown_ignored_files;
@@ -18,6 +18,7 @@ use crate::model::{
     WorkspaceOwnership, WorkspaceRecord, WorkspaceSlot, WorkspaceStatus,
 };
 use crate::state::index::remember_repository;
+use crate::state::paths::trash_root;
 use crate::state::repository::{LockedRepository, save_repository_state};
 use crate::util::{canonical_or_absolute, now_iso, random_short};
 use crate::workspace::lease::{self, LeaseRequest};
@@ -160,7 +161,9 @@ pub fn materialize_workspace(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        clear_cache_roots(&slot.path, &roots)?;
+        if discard_cache_roots(&slot.path, &roots, &trash_root(config, &repository))?.is_some() {
+            launch_background("__purge", &repository.common_dir);
+        }
         reset_workspace(&slot.path, &target.oid)?;
     }
     let active_path = slot.path.clone();
@@ -199,7 +202,7 @@ pub fn materialize_workspace(
     // Release the lock before spawning: the replenisher needs it.
     drop(locked);
     if replenish {
-        launch_replenish(&repository.common_dir);
+        launch_background("__replenish", &repository.common_dir);
     }
     Ok(materialized(
         &repository,
@@ -266,7 +269,7 @@ fn activate(
     )?;
 
     // Whatever is ignored now was ours; only additions count against `done` later.
-    let baseline_ignored = unknown_ignored_files(active_path, &environment.cache_roots)?;
+    let baseline_ignored = unknown_ignored_files(active_path, &environment.cache_roots, &plan.output_roots)?;
     // Hash what we copied so `done` can tell an edited .env from an untouched one.
     let baseline_seed_files = snapshot_seed_files(active_path, seeded_paths)?;
     let timestamp = now_iso();
@@ -368,14 +371,16 @@ fn external_workspace(repository: &Repository, target: &ResolvedTarget, path: &P
     }
 }
 
-/// Tops the pool back up in a detached background process so the caller returns immediately.
-fn launch_replenish(common_dir: &Path) {
-    // Best effort: without a path to ourselves the pool simply stays as it is.
+/// Runs a hidden pool maintenance command, such as `__replenish`, in a detached background
+/// process so the caller returns immediately.
+fn launch_background(command: &str, common_dir: &Path) {
+    // Best effort: without a path to ourselves the pool stays as it is, and discarded caches
+    // wait for `system gc`.
     let Ok(executable) = std::env::current_exe() else {
         return;
     };
     let _ = Command::new(executable)
-        .arg("__replenish")
+        .arg(command)
         .arg(common_dir)
         // Anywhere but the caller's directory: a workspace with our process in it can't be returned.
         .current_dir(common_dir)

@@ -2,11 +2,12 @@
 
 use std::collections::BTreeSet;
 
-use crate::error::Result;
+use crate::error::{AcreError, Result};
 use crate::git::operations::remove_worktree;
 use crate::git::repository::Repository;
 use crate::model::{AcreConfig, RepositoryState, WorkspaceSlot, WorkspaceStatus};
 use crate::state::lock::RepositoryLock;
+use crate::state::paths::trash_root;
 use crate::state::repository::{
     LockedRepository, quarantine_unreadable_state, save_repository_state, stored_repository_state,
 };
@@ -161,9 +162,44 @@ pub fn gc_repository(config: &AcreConfig, repository_input: &Repository) -> Resu
         .slots
         .retain(|slot| !removed_ids.contains(slot.id.as_str()));
     locked.save(config)?;
-    Ok(GcReport {
+    let report = GcReport {
         removed,
         skipped,
-        state: locked.state,
-    })
+        state: locked.state.clone(),
+    };
+    // Outside the lock: deleting discarded caches can take a while and protects nothing.
+    drop(locked);
+    empty_trash(config, repository_input)?;
+    Ok(report)
+}
+
+/// Deletes the caches discarded into the repository's trash. Nothing there is referenced by
+/// state, so an interrupted or concurrent purge is harmless; the next one finishes the job.
+pub fn empty_trash(config: &AcreConfig, repository: &Repository) -> Result<()> {
+    let trash = trash_root(config, repository);
+    let entries = match std::fs::read_dir(&trash) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(AcreError::io(
+                format!("could not read {}", trash.display()),
+                error,
+            ));
+        }
+    };
+    for entry in entries {
+        let path = entry
+            .map_err(|error| AcreError::io("could not read directory entry", error))?
+            .path();
+        // NotFound means another purge got there first.
+        if let Err(error) = std::fs::remove_dir_all(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(AcreError::io(
+                format!("could not remove {}", path.display()),
+                error,
+            ));
+        }
+    }
+    Ok(())
 }

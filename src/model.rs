@@ -242,6 +242,7 @@ pub struct PoolConfig {
 pub struct EnvironmentConfig {
     pub cache_roots: Vec<String>,
     pub required_roots: Vec<String>,
+    pub output_roots: Vec<String>,
     pub seed_files: Vec<String>,
     pub excluded_roots: Vec<String>,
 }
@@ -260,6 +261,8 @@ pub struct RepoEnvironmentConfig {
     pub cache_roots: Vec<String>,
     #[serde(default)]
     pub required_roots: Vec<String>,
+    #[serde(default)]
+    pub output_roots: Vec<String>,
     #[serde(default)]
     pub seed_files: Vec<String>,
     #[serde(default)]

@@ -12,6 +12,7 @@
       "properties": {
         "cacheRoots": { "$ref": "#/$defs/paths" },
         "requiredRoots": { "$ref": "#/$defs/paths" },
+        "outputRoots": { "$ref": "#/$defs/paths" },
         "seedFiles": { "$ref": "#/$defs/paths" },
         "excludedRoots": { "$ref": "#/$defs/paths" }
       }

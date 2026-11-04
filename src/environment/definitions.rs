@@ -1,4 +1,5 @@
-//! Built-in ecosystem knowledge: which files identify a toolchain and which directories it caches.
+//! Built-in ecosystem knowledge: which files identify a toolchain, which directories it caches,
+//! and which build output it regenerates.
 
 use std::collections::BTreeMap;
 
@@ -7,8 +8,18 @@ pub struct EcosystemDefinition {
     pub id: &'static str,
     pub cache_roots: &'static [&'static str],
     pub required_roots: &'static [&'static str],
+    /// Ignored paths the toolchain rebuilds from the code, such as `.next`: removed on return,
+    /// never cloned. A cache root inside one, such as `.next/cache`, is kept.
+    pub output_roots: &'static [&'static str],
     pub seed_files: &'static [&'static str],
 }
+
+/// Files the operating system's file manager leaves in any directory it opens.
+pub const SYSTEM_OUTPUT_ROOTS: &[&str] = &[".DS_Store", "Thumbs.db"];
+
+/// What JavaScript tooling conventionally writes: bundler output, test coverage, and
+/// TypeScript's incremental build state.
+const NODE_OUTPUT_ROOTS: &[&str] = &["dist", "coverage", "*.tsbuildinfo"];
 
 // Manifest names fingerprinted at every depth, including toolchain files shared across ecosystems.
 pub const ALL_FINGERPRINT_FILES: &[&str] = &[
@@ -66,6 +77,7 @@ const PNPM: EcosystemDefinition = EcosystemDefinition {
     id: "pnpm",
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
+    output_roots: NODE_OUTPUT_ROOTS,
     seed_files: &[".env", ".env.local"],
 };
 const YARN: EcosystemDefinition = EcosystemDefinition {
@@ -82,36 +94,42 @@ const YARN: EcosystemDefinition = EcosystemDefinition {
         ".pnp.data.json",
     ],
     required_roots: &["node_modules"],
+    output_roots: NODE_OUTPUT_ROOTS,
     seed_files: &[".env", ".env.local"],
 };
 const NPM: EcosystemDefinition = EcosystemDefinition {
     id: "npm",
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
+    output_roots: NODE_OUTPUT_ROOTS,
     seed_files: &[".env", ".env.local"],
 };
 const BUN: EcosystemDefinition = EcosystemDefinition {
     id: "bun",
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
+    output_roots: NODE_OUTPUT_ROOTS,
     seed_files: &[".env", ".env.local"],
 };
 const TURBO: EcosystemDefinition = EcosystemDefinition {
     id: "turbo",
     cache_roots: &[".turbo"],
     required_roots: &[],
+    output_roots: &[],
     seed_files: &[],
 };
 const NEXT: EcosystemDefinition = EcosystemDefinition {
     id: "next",
     cache_roots: &[".next/cache"],
     required_roots: &[],
+    output_roots: &[".next", "next-env.d.ts", "out"],
     seed_files: &[],
 };
 const RUST: EcosystemDefinition = EcosystemDefinition {
     id: "rust",
     cache_roots: &["target"],
     required_roots: &[],
+    output_roots: &[],
     seed_files: &[".env", ".env.local"],
 };
 const PYTHON: EcosystemDefinition = EcosystemDefinition {
@@ -124,12 +142,14 @@ const PYTHON: EcosystemDefinition = EcosystemDefinition {
         ".ruff_cache",
     ],
     required_roots: &[".venv"],
+    output_roots: &[],
     seed_files: &[".env", ".env.local"],
 };
 const GO: EcosystemDefinition = EcosystemDefinition {
     id: "go",
     cache_roots: &[],
     required_roots: &[],
+    output_roots: &[],
     seed_files: &[".env", ".env.local"],
 };
 

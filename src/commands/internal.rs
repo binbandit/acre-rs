@@ -1,4 +1,4 @@
-//! Hidden commands used by the shell integration and the background replenisher.
+//! Hidden commands used by the shell integration and by background pool maintenance.
 
 use crate::cli::CommandContext;
 use crate::commands::done;
@@ -8,6 +8,7 @@ use crate::git::repository::{discover_repository, discover_repository_from_commo
 use crate::state::config::load_config;
 use crate::state::shell::new_shell_session_id;
 use crate::ui::output::Renderer;
+use crate::workspace::maintain::empty_trash;
 use crate::workspace::pool::warm_repository;
 
 pub fn session_id(context: &CommandContext) -> Result<i32> {
@@ -33,6 +34,22 @@ pub fn replenish(context: &CommandContext, common_dir: &std::path::Path) -> Resu
         Ok(())
     })();
     // Detached from any terminal: a failure here has nobody to report to.
+    if std::env::var_os("ACRE_BACKGROUND").is_some() {
+        return Ok(exit::SUCCESS);
+    }
+    result?;
+    if context.global.json {
+        Renderer::new(context).json(&serde_json::json!({"ok": true}));
+    }
+    Ok(exit::SUCCESS)
+}
+
+pub fn purge(context: &CommandContext, common_dir: &std::path::Path) -> Result<i32> {
+    let result = (|| -> Result<()> {
+        let config = load_config()?;
+        let repository = discover_repository_from_common_dir(common_dir)?;
+        empty_trash(&config, &repository)
+    })();
     if std::env::var_os("ACRE_BACKGROUND").is_some() {
         return Ok(exit::SUCCESS);
     }

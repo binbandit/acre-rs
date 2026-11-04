@@ -44,6 +44,7 @@
       "properties": {
         "cacheRoots": { "$ref": "#/$defs/relativePathArray" },
         "requiredRoots": { "$ref": "#/$defs/relativePathArray" },
+        "outputRoots": { "$ref": "#/$defs/relativePathArray" },
         "seedFiles": { "$ref": "#/$defs/relativePathArray" },
         "excludedRoots": { "$ref": "#/$defs/relativePathArray" }
       }

@@ -18,7 +18,7 @@ use crate::ui::output::Renderer;
 use crate::util::{canonical_or_absolute, is_inside, now_iso, random_id};
 use crate::workspace::assess::{AssessOptions, DoneAssessment, assess_workspace_for_return};
 use crate::workspace::lease::release_shell_session_lease;
-use crate::workspace::release::return_workspace;
+use crate::workspace::release::{ReturnResult, return_workspace};
 use crate::workspace::resolve::resolve_existing_target;
 
 pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
@@ -153,7 +153,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
             render_unsafe(context, &result.assessment);
             return Ok(exit::REFUSED);
         }
-        render_done(context, &workspace, result.pooled, result.external);
+        render_done(context, &workspace, &result);
         return Ok(exit::SUCCESS);
     }
 
@@ -289,7 +289,7 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
         render_unsafe(context, &result.assessment);
         return Ok(exit::REFUSED);
     }
-    render_done(context, &workspace, result.pooled, result.external);
+    render_done(context, &workspace, &result);
     Ok(exit::SUCCESS)
 }
 
@@ -318,14 +318,13 @@ fn safe_destination(
     leaving_path: &Path,
     shell_directory: &Path,
 ) -> Result<PathBuf> {
-    if let Some(session_id) = &context.shell.session_id {
-        if let Some(previous) =
+    if let Some(session_id) = &context.shell.session_id
+        && let Some(previous) =
             read_shell_state(config, session_id)?.and_then(|state| state.previous_directory)
-        {
-            // The previous location is only safe if it isn't inside the directory we're about to remove.
-            if !is_inside(leaving_path, &previous) && previous.is_dir() {
-                return Ok(previous);
-            }
+    {
+        // The previous location is only safe if it isn't inside the directory we're about to remove.
+        if !is_inside(leaving_path, &previous) && previous.is_dir() {
+            return Ok(previous);
         }
     }
     let primary = repository
@@ -366,7 +365,7 @@ fn render_unsafe(context: &CommandContext, assessment: &DoneAssessment) {
         return;
     }
     renderer.line(format!(
-        "<bold><yellow>{} is still in use</yellow></bold>",
+        "<bold><yellow>{} can't be returned yet</yellow></bold>",
         renderer.value(&assessment.workspace.target.display_name)
     ));
     renderer.line("");
@@ -392,6 +391,11 @@ fn render_unsafe(context: &CommandContext, assessment: &DoneAssessment) {
         renderer.line("  create a branch for detached commits before returning this workspace");
     }
     render_entries(&renderer, "ignored", &assessment.new_ignored);
+    if !assessment.new_ignored.is_empty() {
+        renderer.line(
+            "  <dim>Delete these, or list build output under environment.outputRoots in .acre.json.</dim>",
+        );
+    }
     render_entries(&renderer, "changed local file", &assessment.changed_seed_files);
     if let Some(error) = &assessment.process_check_error {
         renderer.line(format!("  process check failed: {}", renderer.value(error)));
@@ -420,7 +424,7 @@ fn render_entries(renderer: &Renderer, label: &str, entries: &[String]) {
     }
 }
 
-fn render_done(context: &CommandContext, workspace: &WorkspaceRecord, pooled: bool, external: bool) {
+fn render_done(context: &CommandContext, workspace: &WorkspaceRecord, result: &ReturnResult) {
     let renderer = Renderer::new(context);
     if context.global.json {
         renderer.json(&serde_json::json!({
@@ -428,8 +432,9 @@ fn render_done(context: &CommandContext, workspace: &WorkspaceRecord, pooled: bo
             "action": "done",
             "target": workspace.target.display_name,
             "branch": workspace.target.local_branch,
-            "pooled": pooled,
-            "external": external,
+            "pooled": result.pooled,
+            "external": result.external,
+            "clearedOutputs": result.cleared_outputs,
         }));
         return;
     }
@@ -438,14 +443,31 @@ fn render_done(context: &CommandContext, workspace: &WorkspaceRecord, pooled: bo
         renderer.value(&workspace.target.display_name)
     ));
     renderer.line("");
-    if external {
+    if result.external {
         renderer.line("<dim>External worktree left untouched</dim>");
     } else {
         renderer.line("<dim>Branch and commits preserved</dim>");
-        renderer.line(if pooled {
+        if let Some(cleared) = summarize(&result.cleared_outputs) {
+            renderer.line(format!(
+                "<dim>Build output cleared: {}</dim>",
+                renderer.value(&cleared)
+            ));
+        }
+        renderer.line(if result.pooled {
             "<dim>Warm workspace returned to the pool</dim>"
         } else {
             "<dim>Workspace directory removed</dim>"
         });
     }
+}
+
+/// The first few paths and a count of the rest, for a single line.
+fn summarize(paths: &[String]) -> Option<String> {
+    const SHOWN: usize = 3;
+    let (first, rest) = paths.split_at(paths.len().min(SHOWN));
+    let mut summary = first.join(", ");
+    if !rest.is_empty() {
+        summary.push_str(&format!(" and {} more", rest.len()));
+    }
+    (!first.is_empty()).then_some(summary)
 }

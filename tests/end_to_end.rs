@@ -4,6 +4,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use assert_cmd::prelude::*;
 use common::{Fixture, branch_exists};
@@ -470,6 +471,96 @@ fn returned_caches_warm_the_next_branch() {
         path.join("node_modules/dep/index.js").exists(),
         "the pooled caches came along"
     );
+}
+
+#[test]
+fn build_output_is_cleared_on_return_while_caches_stay() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.repo.join(".gitignore"),
+        "node_modules\n.next/\nnext-env.d.ts\n*.tsbuildinfo\nstorybook-static\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.repo.join("package.json"),
+        r#"{"name":"fixture","dependencies":{"next":"16.0.0"}}"#,
+    )
+    .unwrap();
+    // A repository declares its own build output beside the built-in kinds.
+    fs::write(
+        fixture.repo.join(".acre.json"),
+        r#"{"environment":{"outputRoots":["storybook-static"]}}"#,
+    )
+    .unwrap();
+    common::git(&fixture.repo, &["add", "-A"]);
+    common::git(&fixture.repo, &["commit", "-q", "-m", "next app"]);
+    let first = fixture.open_workspace("feature/build");
+    for file in [
+        ".next/cache/webpack/chunk",
+        ".next/server/page.js",
+        "next-env.d.ts",
+        "tsconfig.tsbuildinfo",
+        "storybook-static/index.html",
+    ] {
+        let path = first.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "built").unwrap();
+    }
+
+    let done = fixture.json(&["done", "feature/build", "--json"]);
+    assert_eq!(done["pooled"], true, "{done}");
+    assert_eq!(
+        done["clearedOutputs"],
+        serde_json::json!([
+            ".next",
+            "next-env.d.ts",
+            "storybook-static",
+            "tsconfig.tsbuildinfo"
+        ]),
+        "{done}"
+    );
+    assert!(!first.join(".next/server").exists());
+
+    let second = fixture.open_workspace("feature/next");
+    assert_eq!(second, first, "the returned slot is reused");
+    assert_eq!(
+        fs::read_to_string(second.join(".next/cache/webpack/chunk")).unwrap(),
+        "built"
+    );
+}
+
+#[test]
+fn a_stale_slot_hands_its_caches_to_a_background_purge() {
+    let fixture = Fixture::new();
+    let first = fixture.open_workspace("first");
+    fs::create_dir_all(first.join("node_modules/dep")).unwrap();
+    fs::write(first.join("node_modules/dep/index.js"), "old generation").unwrap();
+    assert_eq!(fixture.json(&["done", "first", "--json"])["pooled"], true);
+    fs::write(
+        fixture.repo.join("package.json"),
+        r#"{"name":"fixture","dependencies":{"dep":"2"}}"#,
+    )
+    .unwrap();
+    common::git(&fixture.repo, &["commit", "-q", "-am", "new generation"]);
+
+    let second = fixture.open_workspace("second");
+    assert_eq!(second, first, "the stale slot is recycled");
+    assert!(!second.join("node_modules").exists());
+    let repository = fs::read_dir(fixture.root.join("repositories"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    let trash = repository.path().join("trash");
+    assert!(
+        trash.is_dir(),
+        "the old caches were moved, not deleted in the foreground"
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while fs::read_dir(&trash).unwrap().next().is_some() {
+        assert!(Instant::now() < deadline, "nothing emptied {}", trash.display());
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[test]

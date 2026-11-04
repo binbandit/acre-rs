@@ -1,7 +1,8 @@
 //! Returns a workspace: proves it safe, then pools its slot or removes the worktree.
 
-use crate::environment::fingerprint::build_environment_plan;
+use crate::environment::fingerprint::{EnvironmentPlan, build_environment_plan};
 use crate::environment::inspect::inspect_environment;
+use crate::environment::outputs::clear_build_outputs;
 use crate::environment::seed::{clear_seed_files, seed_files_only};
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::{detach_workspace, remove_worktree, restore_stored_target};
@@ -23,6 +24,8 @@ pub struct ReturnResult {
     pub returned: bool,
     pub pooled: bool,
     pub external: bool,
+    /// Build output removed before the workspace went back to the pool.
+    pub cleared_outputs: Vec<String>,
 }
 
 pub fn return_workspace(
@@ -65,6 +68,7 @@ pub(crate) fn return_workspace_locked(
             returned: false,
             pooled: false,
             external: true,
+            cleared_outputs: Vec::new(),
         });
     }
 
@@ -77,6 +81,7 @@ pub(crate) fn return_workspace_locked(
             returned: false,
             pooled: false,
             external: false,
+            cleared_outputs: Vec::new(),
         });
     }
 
@@ -94,23 +99,20 @@ pub(crate) fn return_workspace_locked(
     let slot = slot_to_keep(config, &repository, state, &workspace, &environment);
     let pooled = slot.is_some();
 
-    if let Err(error) = pool_or_remove(
-        config,
-        &repository,
-        state,
-        &workspace,
-        &plan.seed_files,
-        environment,
-        slot,
-    ) {
-        let _ = restore_workspace(&repository, &workspace);
-        return Err(error);
-    }
+    let cleared_outputs =
+        match pool_or_remove(config, &repository, state, &workspace, &plan, environment, slot) {
+            Ok(cleared_outputs) => cleared_outputs,
+            Err(error) => {
+                let _ = restore_workspace(&repository, &workspace);
+                return Err(error);
+            }
+        };
     Ok(ReturnResult {
         assessment,
         returned: true,
         pooled,
         external: false,
+        cleared_outputs,
     })
 }
 
@@ -164,25 +166,27 @@ fn slot_to_keep(
     Some(slot)
 }
 
-/// Detaches the branch, then keeps the prepared worktree in place or removes it.
+/// Detaches the branch, then keeps the prepared worktree in place or removes it. Returns the
+/// build output cleared from a kept worktree.
 fn pool_or_remove(
     config: &AcreConfig,
     repository: &Repository,
     state: &mut RepositoryState,
     workspace: &WorkspaceRecord,
-    seed_files: &[String],
+    plan: &EnvironmentPlan,
     environment: EnvironmentSnapshot,
     slot: Option<WorkspaceSlot>,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     // Detach first so the branch is free to be checked out elsewhere immediately.
     detach_workspace(&workspace.path)?;
+    let mut cleared_outputs = Vec::new();
     match slot {
         Some(mut slot) => {
             // Secrets never sit in the pool: the next occupant could be an untrusted PR. That
             // includes seed-named files the user created, which reach here only when unknown
             // ignored files are configured not to block a return.
             let mut scrub = workspace.seeded_paths.clone();
-            for relative in seed_files {
+            for relative in &plan.seed_files {
                 if !scrub.contains(relative)
                     && workspace.path.join(relative).symlink_metadata().is_ok()
                     && is_ignored_path(&workspace.path, relative)?
@@ -191,6 +195,8 @@ fn pool_or_remove(
                 }
             }
             clear_seed_files(&workspace.path, &scrub)?;
+            // The next branch rebuilds its own output; it keeps only the caches.
+            cleared_outputs = clear_build_outputs(&workspace.path, &plan.cache_roots, &plan.output_roots)?;
             slot.head = repository
                 .worktree_at(&workspace.path)
                 .map(|worktree| worktree.head.clone());
@@ -215,7 +221,8 @@ fn pool_or_remove(
         }
     }
     forget_workspace(state, &workspace.id);
-    save_repository_state(config, repository, state)
+    save_repository_state(config, repository, state)?;
+    Ok(cleared_outputs)
 }
 
 fn forget_workspace(state: &mut RepositoryState, workspace_id: &str) {

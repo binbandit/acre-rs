@@ -33,32 +33,50 @@ For Node projects, `node_modules` is normally required. Rust’s `target` direct
 
 ## Built-in ecosystem policy
 
-| Ecosystem | Fingerprint files | Cache roots | Required roots |
-|---|---|---|---|
-| pnpm | `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc`, `.pnpmfile.cjs` | `node_modules` | `node_modules` |
-| Yarn | `package.json`, `yarn.lock`, `.yarnrc`, `.yarnrc.yml` | `node_modules`, `.yarn/cache`, `.yarn/unplugged`, `.yarn/install-state.gz`, `.yarn/build-state.yml`, `.pnp.cjs`, `.pnp.loader.mjs`, `.pnp.data.json` | `node_modules` |
-| npm | `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `.npmrc` | `node_modules` | `node_modules` |
-| Bun | `package.json`, `bun.lock`, `bun.lockb`, `bunfig.toml` | `node_modules` | `node_modules` |
-| Turborepo | `package.json`, `turbo.json` | `.turbo` | none |
-| Next.js | `package.json`, `next.config.*` | `.next/cache` | none |
-| Rust | `Cargo.toml`, `Cargo.lock`, toolchain files | `target` | none |
-| Python | `pyproject.toml`, `uv.lock`, Poetry, requirements, Pipenv, and setuptools files | `.venv`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache` | `.venv` |
-| Go | `go.mod`, `go.sum`, `go.work`, `go.work.sum` | none by default | none |
+| Ecosystem | Fingerprint files | Cache roots | Required roots | Build output |
+|---|---|---|---|---|
+| pnpm | `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc`, `.pnpmfile.cjs` | `node_modules` | `node_modules` | `dist`, `coverage`, `*.tsbuildinfo` |
+| Yarn | `package.json`, `yarn.lock`, `.yarnrc`, `.yarnrc.yml` | `node_modules`, `.yarn/cache`, `.yarn/unplugged`, `.yarn/install-state.gz`, `.yarn/build-state.yml`, `.pnp.cjs`, `.pnp.loader.mjs`, `.pnp.data.json` | `node_modules` | `dist`, `coverage`, `*.tsbuildinfo` |
+| npm | `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `.npmrc` | `node_modules` | `node_modules` | `dist`, `coverage`, `*.tsbuildinfo` |
+| Bun | `package.json`, `bun.lock`, `bun.lockb`, `bunfig.toml` | `node_modules` | `node_modules` | `dist`, `coverage`, `*.tsbuildinfo` |
+| Turborepo | `package.json`, `turbo.json` | `.turbo` | none | none |
+| Next.js | `package.json`, `next.config.*` | `.next/cache` | none | `.next`, `next-env.d.ts`, `out` |
+| Rust | `Cargo.toml`, `Cargo.lock`, toolchain files | `target` | none | none |
+| Python | `pyproject.toml`, `uv.lock`, Poetry, requirements, Pipenv, and setuptools files | `.venv`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache` | `.venv` | none |
+| Go | `go.mod`, `go.sum`, `go.work`, `go.work.sum` | none by default | none | none |
 
-Built-ins can be extended or excluded in user config or `.acre.json`. Paths are data only and must remain repository-relative.
+Every repository also treats `.DS_Store` and `Thumbs.db`, which file managers leave behind, as build output.
+
+Built-ins can be extended in user config or `.acre.json` with `cacheRoots`, `requiredRoots`, `outputRoots`, and `seedFiles`, and removed with `excludedRoots`. Paths are data only and must remain repository-relative.
 
 A cache root applies at any depth, so a monorepo package's `packages/app/node_modules` is cloned, cleared, and excluded from the ignored-data check exactly like the top-level `node_modules`. Only Git-ignored directories qualify, plus the install-state files listed above, including at the top level. Tracked paths and symlinked cache roots are not copied or cleared.
+
+When a slot is recycled for a different generation, its old cache roots are renamed into the repository's `trash` directory and a detached Acre process deletes them, so opening the workspace does not wait for tens of thousands of files to be unlinked. `acre system gc` empties anything a background purge left behind.
+
+## Build output
+
+Build output is ignored data a tool regenerates from the code, such as Next.js's `.next` or TypeScript's `tsconfig.tsbuildinfo`. It never blocks `done`. When a workspace returns to the pool, Acre removes it so the next branch never sees another branch's server bundles or generated route types, and keeps any cache root inside it: `.next` goes, `.next/cache` stays. Build output is never cloned between workspaces and is not part of the fingerprint.
+
+Like cache roots, output roots match at any depth. A component starting with `*` matches any longer name with that ending, so `*.tsbuildinfo` matches `packages/ui/tsconfig.build.tsbuildinfo`. Only real files and directories qualify; a symlink stays unknown data.
+
+Declare other build output in `.acre.json`:
+
+```json
+{ "environment": { "outputRoots": ["storybook-static", "playwright-report"] } }
+```
+
+Declare only paths a build fully regenerates. Data a tool keeps between runs, such as a local database, is not build output; keep it out of the workspace or let `done` refuse.
 
 ## Copy strategy
 
 Acre prefers whole-slot reuse. When a second compatible workspace needs the same environment while the first remains active, Acre attempts:
 
-1. a filesystem clone using `cp -cR` on macOS, only when the source and destination share one APFS volume, or `cp -a --reflink=always` on Linux;
+1. a filesystem clone: on macOS one `clonefile(2)` call clones each cache root's whole tree inside the kernel, and on Linux `cp -a --reflink=always` clones it file by file;
 2. a normal recursive copy when cloning is unavailable.
 
 Copies are staged in a temporary directory and published only after completion. Before copying and again before publication, Acre checks the source checkout's current commit and refuses sources with staged, unstaged, or untracked fingerprint files. Ordinary source-code edits do not prevent cache sharing.
 
-The reported mode is honest. Acre does not label a full copy as a reflink: Apple's `cp -c` silently copies when it cannot clone, so Acre only uses it where a clone is certain and otherwise copies and counts the files itself.
+The reported mode is honest. Acre does not label a full copy as a reflink: `clonefile(2)` and `--reflink=always` fail instead of copying when the paths are on different volumes or the filesystem cannot clone, and Acre then copies and counts the files itself.
 
 ## Seed files
 

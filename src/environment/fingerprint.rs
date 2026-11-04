@@ -7,7 +7,7 @@ use std::process::Command;
 use serde_json::{Map, Value, json};
 
 use crate::environment::definitions::{
-    ALL_FINGERPRINT_FILES, EcosystemDefinition, PATCH_DIRECTORY, detect_ecosystems,
+    ALL_FINGERPRINT_FILES, EcosystemDefinition, PATCH_DIRECTORY, SYSTEM_OUTPUT_ROOTS, detect_ecosystems,
 };
 use crate::environment::roots::is_within_root;
 use crate::error::{AcreError, Result, exit};
@@ -23,6 +23,9 @@ pub struct EnvironmentPlan {
     pub ecosystem_ids: Vec<String>,
     pub cache_roots: Vec<String>,
     pub required_roots: Vec<String>,
+    /// Build output removed when a workspace returns. Never stored in a slot, so it is not
+    /// part of the fingerprint.
+    pub output_roots: Vec<String>,
     pub seed_files: Vec<String>,
     pub platform_key: String,
 }
@@ -88,6 +91,18 @@ pub fn build_environment_plan(
     // A required root that isn't also a cache root would demand something we never manage.
     .filter(|root| cache_roots.iter().any(|cache| is_within_root(root, cache)))
     .collect::<Vec<_>>();
+    let output_roots = unique_paths(
+        ecosystems
+            .iter()
+            .flat_map(|item| item.output_roots.iter())
+            .chain(SYSTEM_OUTPUT_ROOTS.iter())
+            .map(|value| (*value).to_owned())
+            .chain(config.environment.output_roots.iter().cloned())
+            .chain(overrides.output_roots.iter().cloned()),
+    )
+    .into_iter()
+    .filter(|root| !excluded.contains(root))
+    .collect::<Vec<_>>();
     let seed_files = unique_paths(
         ecosystems
             .iter()
@@ -112,17 +127,21 @@ pub fn build_environment_plan(
                 .map(|(directory, tree)| json!([format!("{directory}/"), sha256(tree)])),
         )
         .collect();
-    for seed in &seed_files {
-        for cache in &cache_roots {
-            if format!("/{seed}/").contains(&format!("/{cache}/")) || cache.starts_with(&format!("{seed}/")) {
-                return Err(AcreError::new(
-                    "ACRE_CONFIG_INVALID",
-                    format!(
-                        "Seed path {seed} overlaps cache root {cache}. Keep secrets outside cache roots."
-                    ),
-                    exit::USAGE,
-                ));
-            }
+    // Caches are cloned between workspaces and build output is deleted; secrets get neither.
+    let managed_roots = cache_roots
+        .iter()
+        .map(|root| ("cache root", root))
+        .chain(output_roots.iter().map(|root| ("build output root", root)));
+    for (kind, root) in managed_roots {
+        if let Some(seed) = seed_files
+            .iter()
+            .find(|seed| is_within_root(seed, root) || root.starts_with(&format!("{seed}/")))
+        {
+            return Err(AcreError::new(
+                "ACRE_CONFIG_INVALID",
+                format!("Seed path {seed} overlaps {kind} {root}. Keep secrets outside managed roots."),
+                exit::USAGE,
+            ));
         }
     }
     // Native modules and build outputs don't survive an OS or Node major change. Node is asked
@@ -157,6 +176,7 @@ pub fn build_environment_plan(
         ecosystem_ids,
         cache_roots,
         required_roots,
+        output_roots,
         seed_files,
         platform_key,
     })

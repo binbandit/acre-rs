@@ -78,6 +78,11 @@ pub fn active_root(config: &AcreConfig, repository: &Repository) -> PathBuf {
     repository_root(config, repository).join("workspaces")
 }
 
+/// Caches moved out of a workspace wait here until a background process deletes them.
+pub fn trash_root(config: &AcreConfig, repository: &Repository) -> PathBuf {
+    repository_root(config, repository).join("trash")
+}
+
 pub fn slots_root(config: &AcreConfig, repository: &Repository) -> PathBuf {
     repository_root(config, repository).join("slots")
 }

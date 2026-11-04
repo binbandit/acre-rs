@@ -1,4 +1,4 @@
-//! Classifies Git-ignored paths into approved cache roots and unknown data.
+//! Classifies Git-ignored paths into approved cache roots, build output, and unknown data.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -22,6 +22,25 @@ impl IgnoredLayout {
         self.cache_roots
             .iter()
             .any(|present| is_within_root(present, root))
+    }
+
+    /// Moves the unknown entries that are build output, a real file or directory within one of
+    /// `output_roots`, out of `unknown`, and returns them.
+    pub fn take_outputs(&mut self, worktree: &Path, output_roots: &[String]) -> Result<Vec<String>> {
+        let mut outputs = Vec::new();
+        let mut unknown = Vec::new();
+        for entry in std::mem::take(&mut self.unknown) {
+            let relative = entry.trim_end_matches('/');
+            if output_roots.iter().any(|root| is_within_root(relative, root))
+                && safe_cache_path(worktree, relative)?
+            {
+                outputs.push(relative.to_owned());
+            } else {
+                unknown.push(entry);
+            }
+        }
+        self.unknown = unknown;
+        Ok(outputs)
     }
 }
 
@@ -64,9 +83,15 @@ pub fn inspect_ignored(worktree: &Path, cache_roots: &[String]) -> Result<Ignore
     })
 }
 
-/// Expand unknown directories so additions beside a seed cannot hide behind a collapsed entry.
-pub fn unknown_ignored_files(worktree: &Path, cache_roots: &[String]) -> Result<Vec<String>> {
-    let layout = inspect_ignored(worktree, cache_roots)?;
+/// Ignored files that are neither cache nor build output. Unknown directories are expanded so
+/// additions beside a seed cannot hide behind a collapsed entry.
+pub fn unknown_ignored_files(
+    worktree: &Path,
+    cache_roots: &[String],
+    output_roots: &[String],
+) -> Result<Vec<String>> {
+    let mut layout = inspect_ignored(worktree, cache_roots)?;
+    layout.take_outputs(worktree, output_roots)?;
     let mut files = BTreeSet::new();
     for entry in layout.unknown {
         collect_unknown(
@@ -119,7 +144,7 @@ fn collect_unknown(
 
 /// A real directory or file reached without passing through a symlink, so copying or removing
 /// it cannot touch anything outside the worktree.
-fn safe_cache_path(worktree: &Path, relative: &str) -> Result<bool> {
+pub fn safe_cache_path(worktree: &Path, relative: &str) -> Result<bool> {
     Ok(!has_symlink_parent(worktree, Path::new(relative))?
         && fs::symlink_metadata(worktree.join(relative))
             .is_ok_and(|metadata| metadata.is_dir() || metadata.is_file()))
@@ -165,10 +190,21 @@ fn nested_cache_root(entry: &str, root: &str) -> Option<String> {
 }
 
 /// True when the repository-relative `path` is `root` or lies beneath a directory matching
-/// `root` at any depth, so `packages/app/node_modules` matches the root `node_modules`.
-/// Both sides arrive without `./` prefixes or trailing slashes.
+/// `root` at any depth, so `packages/app/node_modules` matches the root `node_modules`. A root
+/// component starting with `*` matches any longer name ending in the rest, as `*.tsbuildinfo`
+/// does. Both sides arrive without `./` prefixes or trailing slashes.
 pub fn is_within_root(path: &str, root: &str) -> bool {
-    format!("/{path}/").contains(&format!("/{root}/"))
+    let path: Vec<&str> = path.split('/').collect();
+    let root: Vec<&str> = root.split('/').collect();
+    path.windows(root.len()).any(|names| {
+        names
+            .iter()
+            .zip(&root)
+            .all(|(name, pattern)| match pattern.strip_prefix('*') {
+                Some(suffix) => name.len() > suffix.len() && name.ends_with(suffix),
+                None => name == pattern,
+            })
+    })
 }
 
 /// Sorted order puts parents first, so anything beneath a kept path is already covered.
@@ -294,6 +330,12 @@ mod tests {
         assert!(is_within_root("apps/web/.next/cache", ".next/cache"));
         assert!(!is_within_root("node_modules_backup", "node_modules"));
         assert!(!is_within_root("apps/web/.next", ".next/cache"));
+        assert!(is_within_root(
+            "packages/ui/tsconfig.tsbuildinfo",
+            "*.tsbuildinfo"
+        ));
+        assert!(!is_within_root("packages/ui/.tsbuildinfo", "*.tsbuildinfo"));
+        assert!(!is_within_root("tsconfig.tsbuildinfo.bak", "*.tsbuildinfo"));
     }
 
     #[test]
