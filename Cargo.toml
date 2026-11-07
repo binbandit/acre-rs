@@ -30,7 +30,7 @@ tempfile = "3.27"
 fs4 = "1.1"
 # Held at 8.x: from 9.0 the native Child that wait-timeout needs is reachable only through an
 # unsafe accessor, and this crate denies unsafe code.
-process-wrap = { version = "8.2.2", default-features = false, features = ["std", "process-group", "job-object", "tracing"] }
+process-wrap = { version = "10.0.1", default-features = false, features = ["std", "process-group", "job-object", "tracing"] }
 unicode-width = "0.2.3"
 unicode-segmentation = "1.13.3"
 
