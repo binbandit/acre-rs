@@ -1,14 +1,13 @@
 //! Per-repository state: loading reconciled against Git, recovery of orphaned worktrees, locked access.
 
-use crate::model::TargetKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::error::{AcreError, Result, exit};
-use crate::git::repository::{Repository, discover_repository};
+use crate::git::repository::Repository;
 use crate::git::worktrees::GitWorktree;
 use crate::model::{
-    AcreConfig, RepositoryState, StoredTarget, TrustLevel, WorkspaceOwnership, WorkspaceRecord,
+    AcreConfig, RepositoryState, StoredTarget, TargetKind, TrustLevel, WorkspaceOwnership, WorkspaceRecord,
     WorkspaceStatus,
 };
 use crate::state::lock::{RepositoryLock, is_pid_alive};
@@ -197,25 +196,21 @@ pub struct LockedRepository {
 }
 
 impl LockedRepository {
-    /// Foreground operations report contention immediately.
+    /// Waits for whoever holds the lock: another command, or a replenisher between cache copies.
     pub fn open(config: &AcreConfig, repository: &Repository) -> Result<Self> {
-        Self::try_open(config, repository)
-    }
-
-    /// Background replenishment can wait to publish work already prepared.
-    pub fn open_waiting(config: &AcreConfig, repository: &Repository) -> Result<Self> {
         let lock = RepositoryLock::acquire(&repository_lock_path(config, repository))?;
         Self::with_lock(config, repository, lock)
     }
 
+    /// Fails at once when the lock is held, for bookkeeping that must never stall navigation.
     pub fn try_open(config: &AcreConfig, repository: &Repository) -> Result<Self> {
         let lock = RepositoryLock::try_acquire(&repository_lock_path(config, repository))?;
         Self::with_lock(config, repository, lock)
     }
 
     fn with_lock(config: &AcreConfig, repository: &Repository, lock: RepositoryLock) -> Result<Self> {
-        // Rediscover under the lock: another process may have added or pruned worktrees.
-        let repository = discover_repository(&repository.top_level)?;
+        // Another process may have added or pruned worktrees before we got the lock.
+        let repository = repository.refreshed()?;
         let state = load_repository_state(config, &repository)?;
         Ok(Self {
             repository,

@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use crate::error::{AcreError, Result};
 use crate::git::operations::remove_worktree;
 use crate::git::repository::Repository;
-use crate::model::{AcreConfig, RepositoryState, WorkspaceSlot, WorkspaceStatus};
+use crate::model::{AcreConfig, RepositoryState, WorkspaceOwnership, WorkspaceSlot, WorkspaceStatus};
 use crate::state::lock::RepositoryLock;
 use crate::state::paths::trash_root;
 use crate::state::repository::{
@@ -47,7 +47,7 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
             .state
             .workspaces
             .iter()
-            .filter(|workspace| workspace.ownership == crate::model::WorkspaceOwnership::Acre)
+            .filter(|workspace| workspace.ownership == WorkspaceOwnership::Acre)
             .map(|workspace| &workspace.path),
     );
     for path in owned {
@@ -55,7 +55,7 @@ pub fn repair_repository_state(config: &AcreConfig, repository_input: &Repositor
             let _ = remove_worktree(&locked.repository, path, false);
         }
     }
-    locked.repository = crate::git::repository::discover_repository(&repository_input.top_level)?;
+    locked.repository = locked.repository.refreshed()?;
     let repository = &locked.repository;
     // Loading recovers unregistered Acre worktrees, so anything absent from the persisted
     // state afterwards was recovered by this repair.

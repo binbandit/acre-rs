@@ -120,6 +120,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_held_lock_is_reported_busy_without_waiting() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("state.lock");
+        let _held = RepositoryLock::try_acquire(&path).expect("free lock");
+        let contended = RepositoryLock::try_acquire(&path).err().expect("held lock");
+        assert_eq!(contended.code, "ACRE_REPOSITORY_BUSY");
+    }
+
+    #[test]
     fn pid_liveness_tracks_real_processes() {
         assert!(is_pid_alive(std::process::id()));
         assert!(!is_pid_alive(0));

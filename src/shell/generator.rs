@@ -91,7 +91,6 @@ acre() {{
     return 127
   fi
   _acre_file="$(mktemp "${{TMPDIR:-/tmp}}/acre-directive.XXXXXX")" || return 3
-  chmod 600 "$_acre_file" 2>/dev/null || true
   if ACRE_DIRECTIVE_FILE="$_acre_file" ACRE_SHELL_SESSION_ID="$ACRE_SHELL_SESSION_ID" ACRE_SHELL_PID="$$" command "$_acre_executable" "$@"; then
     _acre_status=0
   else

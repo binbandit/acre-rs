@@ -1,5 +1,7 @@
 //! Turns what the user typed into an exact Git target, never guessing and never creating.
 
+use std::collections::BTreeSet;
+
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::fetch_ref;
 use crate::git::refs::{
@@ -7,14 +9,14 @@ use crate::git::refs::{
 };
 use crate::git::repository::Repository;
 use crate::git::worktrees::GitWorktree;
-use crate::model::WorkspaceStatus;
-use crate::model::{PullRequestTarget, RepositoryState, StoredTarget, TargetKind, TrustLevel};
+use crate::model::{
+    PullRequestTarget, RepositoryState, StoredTarget, TargetKind, TrustLevel, WorkspaceStatus,
+};
 use crate::provider::github::{
     ensure_pull_request_object, parse_pull_request_selector, pull_request_repository, resolve_pull_request,
     validate_pull_request_url,
 };
 use crate::util::is_subsequence;
-use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedTarget {

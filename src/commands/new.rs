@@ -6,7 +6,7 @@ use crate::error::{Result, exit};
 use crate::git::repository::discover_repository;
 use crate::state::config::load_config;
 use crate::ui::output::Renderer;
-use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
+use crate::workspace::activate::materialize_workspace;
 use crate::workspace::lease::LeaseRequest;
 use crate::workspace::resolve::resolve_new_target;
 
@@ -26,15 +26,7 @@ pub fn run(
     } else {
         LeaseRequest::for_shell(&context.shell)
     };
-    let result = materialize_workspace(
-        &config,
-        &repository,
-        &target,
-        &MaterializeOptions {
-            lease,
-            no_replenish: false,
-        },
-    )?;
+    let result = materialize_workspace(&config, &repository, &target, lease.as_ref())?;
     if stay {
         let renderer = Renderer::new(context);
         if context.global.json {
@@ -43,7 +35,7 @@ pub fn run(
             render_materialized_summary(&renderer, &result, &result.path, false);
         }
     } else {
-        let _ = navigate_to_materialized(context, &config, &result)?;
+        navigate_to_materialized(context, &config, &result)?;
     }
     Ok(exit::SUCCESS)
 }

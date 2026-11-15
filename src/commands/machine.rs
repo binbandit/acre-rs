@@ -8,7 +8,7 @@ use crate::state::config::load_config;
 use crate::state::index::load_repository_index;
 use crate::state::repository::load_repository_state;
 use crate::ui::output::Renderer;
-use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
+use crate::workspace::activate::materialize_workspace;
 use crate::workspace::assess::AssessOptions;
 use crate::workspace::lease::{LeaseRequest, release_workspace_lease};
 use crate::workspace::release::return_workspace;
@@ -31,20 +31,13 @@ pub fn acquire(
     } else {
         resolve_existing_target(&repository, &state, selector)?
     };
-    let result = materialize_workspace(
-        &config,
-        &repository,
-        &target,
-        &MaterializeOptions {
-            lease: Some(LeaseRequest {
-                holder: holder.to_owned(),
-                pid,
-                // No shell session: machine leases are released explicitly, never by navigation.
-                session_id: None,
-            }),
-            no_replenish: false,
-        },
-    )?;
+    let lease = LeaseRequest {
+        holder: holder.to_owned(),
+        pid,
+        // No shell session: machine leases are released explicitly, never by navigation.
+        session_id: None,
+    };
+    let result = materialize_workspace(&config, &repository, &target, Some(&lease))?;
     let renderer = Renderer::new(context);
     let payload = serde_json::json!({
         "ok": true,

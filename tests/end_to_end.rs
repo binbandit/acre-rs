@@ -198,7 +198,6 @@ fn previous_location_does_not_wait_for_workspace_preparation() {
     use acre::git::repository::discover_repository;
     use acre::state::lock::RepositoryLock;
     use acre::state::paths::{repository_lock_path, repository_state_path};
-    use std::time::Duration;
 
     let fixture = Fixture::new();
     let (mut new, directive) = fixture.acre_in_shell(&["new", "feature/nav"], "busy-shell", &fixture.repo);

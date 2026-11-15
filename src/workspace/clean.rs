@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use crate::error::{AcreError, Result, exit};
 use crate::git::operations::{delete_merged_branch, remove_worktree};
 use crate::git::refs::{GitRef, GitRefKind, is_ancestor, list_refs};
-use crate::git::repository::{Repository, discover_repository};
+use crate::git::repository::Repository;
 use crate::git::status::in_progress_operation;
 use crate::model::{AcreConfig, WorkspaceOwnership};
 use crate::state::repository::LockedRepository;
 use crate::util::{canonical_or_absolute, is_inside};
-use crate::workspace::assess::{AssessOptions, assess_workspace};
+use crate::workspace::assess::{AssessOptions, assess_workspace, checked_out_plan};
 use crate::workspace::release::return_workspace_locked;
 
 #[derive(Debug, serde::Serialize)]
@@ -131,8 +131,20 @@ pub fn clean_repository(
             Some(worktree) if !is_ancestor(&locked.repository.top_level, &worktree.head, &base.oid)? => {
                 Some(format!("not merged into {}", report.base))
             }
+            // Applying assesses under this same lock as part of the return below.
+            Some(_) if apply => None,
             Some(_) => {
-                match assess_workspace(&locked.repository, &locked.state, &workspace, config, &options) {
+                let assessed = checked_out_plan(&locked.repository, &workspace, config).and_then(|plan| {
+                    assess_workspace(
+                        &locked.repository,
+                        &locked.state,
+                        &workspace,
+                        &plan,
+                        config,
+                        &options,
+                    )
+                });
+                match assessed {
                     Ok(assessment) if assessment.safe => None,
                     Ok(assessment) => Some(assessment.reasons.join("; ")),
                     Err(error) => Some(error.to_string()),
@@ -142,7 +154,7 @@ pub fn clean_repository(
         let reason = if reason.is_none() && apply {
             match return_workspace_locked(config, &mut locked, &workspace.id, &options) {
                 Ok(result) if result.returned => {
-                    locked.repository = discover_repository(&locked.repository.top_level)?;
+                    locked.repository = locked.repository.refreshed()?;
                     None
                 }
                 Ok(result) => Some(result.assessment.reasons.join("; ")),
@@ -204,7 +216,7 @@ pub fn clean_repository(
         report.record(item, reason);
     }
 
-    locked.repository = discover_repository(&locked.repository.top_level)?;
+    locked.repository = locked.repository.refreshed()?;
     // Git can keep a branch in use during a detached rebase or bisect. Never delete refs
     // while an operation is in progress, even when porcelain reports a detached HEAD.
     let mut operation = false;

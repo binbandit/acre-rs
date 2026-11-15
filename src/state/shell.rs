@@ -1,16 +1,12 @@
 //! Per-shell-session navigation history, which powers `acre -`.
 
+use std::path::Path;
+
 use crate::error::Result;
 use crate::model::{AcreConfig, ShellSessionState};
 use crate::state::paths::shell_state_path;
 use crate::state::storage::{read_json, write_json};
-use crate::util::{now_iso, random_id};
-use std::path::Path;
-
-pub fn new_shell_session_id() -> String {
-    random_id()
-}
-
+use crate::util::now_iso;
 pub fn read_shell_state(config: &AcreConfig, id: &str) -> Result<Option<ShellSessionState>> {
     read_json(&shell_state_path(config, id)?)
 }

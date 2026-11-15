@@ -54,12 +54,12 @@ pub fn warm_repository(
 
         let prepared =
             find_environment_source(config, &repository, &state, &plan, &slot.path).and_then(|source| {
-                prepare_environment(&source, &slot.path, &plan)
+                prepare_environment(&source.path, &slot.path, &plan)
                     .ok()
                     .map(|copy| (source, copy))
             });
 
-        let mut locked = LockedRepository::open_waiting(config, &repository)?;
+        let mut locked = LockedRepository::open(config, &repository)?;
         let Some(index) =
             locked.state.slots.iter().position(|candidate| {
                 candidate.id == slot.id && candidate.status == WorkspaceStatus::Retained
@@ -82,7 +82,7 @@ pub fn warm_repository(
         }
         slot.environment = Some(
             match prepared
-                .filter(|(source, _)| source_matches_plan(config, &locked.repository, source, &plan))
+                .filter(|(source, _)| source.is_unchanged())
                 .and_then(|(_, prepared)| prepared.publish(&slot.path, &plan).ok())
             {
                 Some(environment) => environment,
@@ -202,6 +202,20 @@ fn create_empty_slot(
     })
 }
 
+/// A worktree to copy caches from, with the commit it had checked out when it was chosen.
+pub struct EnvironmentSource {
+    pub path: PathBuf,
+    head: String,
+}
+
+impl EnvironmentSource {
+    /// Whether the source is still what was chosen, asked again once its caches are copied: the
+    /// same commit, with no manifest edited since.
+    pub fn is_unchanged(&self) -> bool {
+        unedited_head(&self.path).is_some_and(|head| head == self.head)
+    }
+}
+
 /// A worktree whose prepared caches match `plan`: a trusted workspace or slot first, then the
 /// primary checkout when it is on the same generation and has something to offer.
 pub fn find_environment_source(
@@ -210,7 +224,7 @@ pub fn find_environment_source(
     state: &RepositoryState,
     plan: &EnvironmentPlan,
     excluded_path: &Path,
-) -> Option<PathBuf> {
+) -> Option<EnvironmentSource> {
     let matches = |environment: &Option<EnvironmentSnapshot>| {
         environment
             .as_ref()
@@ -220,8 +234,11 @@ pub fn find_environment_source(
         .workspaces
         .iter()
         // Never clone from an untrusted (fork PR) workspace, whatever its caches look like.
-        .filter(|workspace| workspace.status != WorkspaceStatus::Broken
-            && workspace.trust == TrustLevel::Trusted && matches(&workspace.environment))
+        .filter(|workspace| {
+            workspace.status != WorkspaceStatus::Broken
+                && workspace.trust == TrustLevel::Trusted
+                && matches(&workspace.environment)
+        })
         .map(|workspace| &workspace.path)
         .chain(
             state
@@ -232,30 +249,37 @@ pub fn find_environment_source(
         )
         .map(PathBuf::as_path)
         .chain(std::iter::once(repository.primary_path()));
-    for source in candidates {
-        let Some(_) = repository.worktree_at(source).filter(|worktree| worktree.exists) else {
-            continue;
-        };
-        if source == excluded_path {
+    for path in candidates {
+        if path == excluded_path
+            || !repository
+                .worktree_at(path)
+                .is_some_and(|worktree| worktree.exists)
+        {
             continue;
         }
-        if source_matches_plan(config, repository, source, plan)
-            && inspect_environment(source, plan).is_ok_and(|snapshot| !snapshot.present_roots.is_empty())
+        // Recorded fingerprints go stale when a checkout moves, so the source is read directly.
+        let Some(head) = unedited_head(path) else {
+            continue;
+        };
+        let same_generation = head == plan.reference
+            || build_environment_plan(repository, &head, config)
+                .is_ok_and(|source| source.fingerprint == plan.fingerprint);
+        if same_generation
+            && inspect_environment(path, plan).is_ok_and(|snapshot| !snapshot.present_roots.is_empty())
         {
-            return Some(source.to_path_buf());
+            return Some(EnvironmentSource {
+                path: path.to_path_buf(),
+                head,
+            });
         }
     }
     None
 }
 
-/// Read the source again after copying as well as before; its recorded HEAD may be stale.
-pub fn source_matches_plan(
-    config: &AcreConfig,
-    repository: &Repository,
-    source: &Path,
-    plan: &EnvironmentPlan,
-) -> bool {
-    let manifests_unchanged = read_status(source).is_ok_and(|status| {
+/// The commit `worktree` has checked out, unless a manifest that shapes its environment has been
+/// edited, staged, or added there: its caches then no longer belong to that commit.
+fn unedited_head(worktree: &Path) -> Option<String> {
+    let manifests_unchanged = read_status(worktree).is_ok_and(|status| {
         status
             .entries
             .iter()
@@ -263,10 +287,8 @@ pub fn source_matches_plan(
             .all(|path| !is_fingerprint_input(path))
     });
     manifests_unchanged
-        && resolve_oid(source, "HEAD").ok().flatten().is_some_and(|oid| {
-            build_environment_plan(repository, &oid, config)
-                .is_ok_and(|source_plan| source_plan.fingerprint == plan.fingerprint)
-        })
+        .then(|| resolve_oid(worktree, "HEAD").ok().flatten())
+        .flatten()
 }
 
 /// Idle metadata alone is not permission to reset or delete a checkout someone has edited.

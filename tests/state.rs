@@ -121,26 +121,21 @@ fn legacy_remote_keyed_state_keeps_its_repository_directory() {
 }
 
 #[test]
-fn busy_repository_is_reported_without_waiting() {
+fn a_command_waits_for_a_briefly_held_repository_lock() {
     use acre::git::repository::discover_repository;
-    use acre::state::paths::{repository_lock_path, repository_state_path};
+    use acre::state::paths::repository_lock_path;
 
     let fixture = Fixture::new();
     fixture.open_workspace("existing");
     let config = serde_json::from_slice(&fs::read(&fixture.config).unwrap()).unwrap();
     let repository = discover_repository(&fixture.repo).unwrap();
-    let state_path = repository_state_path(&config, &repository);
-    let before = fs::read(&state_path).unwrap();
     let lock = RepositoryLock::acquire(&repository_lock_path(&config, &repository)).unwrap();
-    let started = Instant::now();
-    assert_cmd::Command::from(fixture.acre(&["new", "contended", "--stay"]))
-        .timeout(Duration::from_secs(3))
-        .assert()
-        .code(acre::error::exit::CONFLICT)
-        .stderr(predicates::str::contains("Another Acre operation"));
-    eprintln!("Busy repository reported in {:?}", started.elapsed());
-    assert_eq!(fs::read(state_path).unwrap(), before);
-    assert!(!common::branch_exists(&fixture.repo, "contended"));
-    drop(lock);
-    fixture.open_workspace("contended");
+    // What a replenisher does between cache copies: hold the lock for a moment, then let go.
+    let holder = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        drop(lock);
+    });
+    let created = fixture.json(&["new", "contended", "--stay", "--json"]);
+    holder.join().unwrap();
+    assert_eq!(created["ok"], true, "{created}");
 }

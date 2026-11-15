@@ -1,22 +1,23 @@
 //! `acre done`: return a workspace, resuming after the shell has moved out of it when needed.
 
-use crate::model::AcreConfig;
 use std::path::{Path, PathBuf};
 
 use crate::cli::CommandContext;
 use crate::error::{AcreError, Result, exit};
 use crate::git::repository::{Repository, discover_repository, discover_repository_from_common_dir};
 use crate::git::status::read_status;
-use crate::model::{PendingDoneOperation, StoredTarget, WorkspaceOwnership, WorkspaceRecord};
+use crate::model::{
+    AcreConfig, PendingDoneOperation, RepositoryState, StoredTarget, WorkspaceOwnership, WorkspaceRecord,
+};
 use crate::shell::directive::write_resume_directive;
-use crate::shell::navigation::{navigate_direct, record_shell_move};
+use crate::shell::navigation::{navigate_direct, record_shell_move, repository_at};
 use crate::state::config::load_config;
 use crate::state::operations::{read_pending_done, remove_pending_operation, save_pending_done};
 use crate::state::repository::load_repository_state;
 use crate::state::shell::read_shell_state;
 use crate::ui::output::Renderer;
 use crate::util::{canonical_or_absolute, is_inside, now_iso, random_id};
-use crate::workspace::assess::{AssessOptions, DoneAssessment, assess_workspace_for_return};
+use crate::workspace::assess::{AssessOptions, DoneAssessment, assess_workspace, checked_out_plan};
 use crate::workspace::lease::release_shell_session_lease;
 use crate::workspace::release::{ReturnResult, return_workspace};
 use crate::workspace::resolve::resolve_existing_target;
@@ -25,43 +26,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
     let config = load_config()?;
     let repository = discover_repository(&context.cwd)?;
     let state = load_repository_state(&config, &repository)?;
-    let shell_directory = std::env::current_dir()?;
-    let current_path = repository
-        .current_worktree
-        .as_ref()
-        .map(|worktree| worktree.path.clone());
-
-    // With a selector, `done` acts on that workspace from wherever we stand.
-    let target_path = if let Some(selector) = selector {
-        let target = resolve_existing_target(&repository, &state, selector)?;
-        target
-            .existing_worktree
-            .as_ref()
-            .map(|worktree| worktree.path.clone())
-            // Match by target identity: PR number and repository, or branch. Never by an absent branch.
-            .or_else(|| {
-                state
-                    .workspace_for_target(&StoredTarget::from(&target))
-                    .map(|workspace| workspace.path.clone())
-            })
-            .ok_or_else(|| {
-                AcreError::new(
-                    "ACRE_WORKSPACE_NOT_ACTIVE",
-                    format!("{selector} does not currently have a workspace."),
-                    exit::NOT_FOUND,
-                )
-            })?
-    } else {
-        current_path.clone().ok_or_else(|| {
-            AcreError::new(
-                "ACRE_WORKSPACE_NOT_FOUND",
-                "Acre could not identify the current worktree.",
-                exit::NOT_FOUND,
-            )
-        })?
-    };
-
-    let workspace = state.workspace_at(&target_path).cloned();
+    let target_path = target_path(&repository, &state, selector)?;
     if repository
         .worktree_at(&target_path)
         .is_some_and(|worktree| worktree.is_main)
@@ -73,89 +38,30 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         )
         .with_details(serde_json::json!({ "path": target_path })));
     }
-    // "Current" means the shell itself would be pulled out from under us; that path needs the resume dance.
-    // -C changes target lookup, not the directory occupied by the calling shell.
-    let is_current = is_inside(&target_path, &shell_directory);
+    // A shell standing in the workspace would have it pulled out from under it, so it has to move
+    // first. -C changes target lookup, not the directory occupied by the calling shell.
+    let shell_directory = std::env::current_dir()?;
+    let shell_inside = is_inside(&target_path, &shell_directory).then_some(shell_directory.as_path());
 
-    if workspace
-        .as_ref()
-        // Unknown and external worktrees get the same treatment: we leave, we don't touch.
-        .is_none_or(|workspace| workspace.ownership == WorkspaceOwnership::External)
-    {
-        // An idle slot has no workspace record either, but it is ours and already in the pool.
-        let idle_slot = workspace.is_none()
-            && state
-                .slots
-                .iter()
-                .any(|slot| canonical_or_absolute(&slot.path) == canonical_or_absolute(&target_path));
-        let noun = if idle_slot {
-            "Warm slot"
-        } else {
-            "External worktree"
-        };
-        let outcome = if idle_slot {
-            "is already in the pool"
-        } else {
-            "was left untouched"
-        };
-        let renderer = Renderer::new(context);
-        if context.global.json {
-            renderer.json(&serde_json::json!({
-                "ok": true,
-                "action": "done",
-                "external": !idle_slot,
-                "pooled": idle_slot,
-                "retained": !idle_slot,
-                "path": target_path,
-            }));
-            return Ok(exit::SUCCESS);
-        }
-        if !is_current {
-            renderer.line(format!(
-                "<dim>{noun} {} {outcome}.</dim>",
-                renderer.value(selector.unwrap_or_else(|| target_path.to_str().unwrap_or("worktree")))
-            ));
-            return Ok(exit::SUCCESS);
-        }
-        let destination = safe_destination(context, &config, &repository, &target_path, &shell_directory)?;
-        // Drop our own lease before leaving, or the worktree looks in use forever.
-        if let Some(session_id) = &context.shell.session_id {
-            let _ = release_shell_session_lease(&config, &repository, session_id);
-        }
-        renderer.line(format!(
-            "<dim>{noun} {} {outcome}.</dim>",
-            renderer.value(
-                target_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("worktree")
-            )
-        ));
-        let label = destination
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("workspace");
-        navigate_direct(context, &config, &destination, label)?;
-        return Ok(exit::SUCCESS);
-    }
-    let workspace = workspace.expect("checked above");
-    // Our own pid and the wrapper shell's are expected in the directory; anything else counts.
-    let assess = AssessOptions {
-        allowed_session_id: context.shell.session_id.clone(),
-        ignored_pids: [Some(std::process::id()), context.shell.pid]
-            .into_iter()
-            .flatten()
-            .collect(),
+    let owned = state
+        .workspace_at(&target_path)
+        .filter(|workspace| workspace.ownership == WorkspaceOwnership::Acre);
+    let Some(workspace) = owned.cloned() else {
+        return leave_untouched(
+            context,
+            &config,
+            &repository,
+            &state,
+            selector,
+            &target_path,
+            shell_inside,
+        );
     };
-    if !is_current {
+    let assess = assess_options(context, context.shell.session_id.clone());
+    let Some(shell_directory) = shell_inside else {
         let result = return_workspace(&config, &repository, &workspace.id, &assess)?;
-        if !result.returned {
-            render_unsafe(context, &result.assessment);
-            return Ok(exit::REFUSED);
-        }
-        render_done(context, &workspace, &result);
-        return Ok(exit::SUCCESS);
-    }
+        return Ok(render_return(context, &workspace, &result));
+    };
 
     if context.global.json {
         return Err(AcreError::new(
@@ -164,8 +70,9 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
             exit::REFUSED,
         ));
     }
-    // The shell sits inside this workspace, so prove the return safe before moving it.
-    let assessment = assess_workspace_for_return(&config, &repository, &workspace.id, &assess)?;
+    // Prove the return safe before moving the shell; the resumed command proves it again.
+    let plan = checked_out_plan(&repository, &workspace, &config)?;
+    let assessment = assess_workspace(&repository, &state, &workspace, &plan, &config, &assess)?;
     if !assessment.safe {
         render_unsafe(context, &assessment);
         return Ok(exit::REFUSED);
@@ -178,7 +85,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
         )
         .with_details(serde_json::json!({ "hint": "acre setup", "workspace": workspace.path })));
     }
-    let destination = safe_destination(context, &config, &repository, &workspace.path, &shell_directory)?;
+    let destination = safe_destination(context, &config, &repository, &workspace.path, shell_directory)?;
     let registered = repository.worktree_at(&workspace.path).ok_or_else(|| {
         AcreError::new(
             "ACRE_WORKTREE_MISSING",
@@ -199,13 +106,130 @@ pub fn run(context: &CommandContext, selector: Option<&str>) -> Result<i32> {
             expected_head: registered.head.clone(),
             expected_status_fingerprint: assessment.status.fingerprint,
             safe_destination: destination.clone(),
-            original_directory: Some(shell_directory),
+            original_directory: Some(shell_directory.to_path_buf()),
             current_session_id: context.shell.session_id.clone(),
             created_at: now_iso(),
         },
     )?;
     write_resume_directive(context, &destination, &token)?;
     Ok(exit::RESUME)
+}
+
+/// The worktree `done` acts on: the one a selector names, from wherever we stand, or the current one.
+fn target_path(repository: &Repository, state: &RepositoryState, selector: Option<&str>) -> Result<PathBuf> {
+    let Some(selector) = selector else {
+        return repository
+            .current_worktree
+            .as_ref()
+            .map(|worktree| worktree.path.clone())
+            .ok_or_else(|| {
+                AcreError::new(
+                    "ACRE_WORKSPACE_NOT_FOUND",
+                    "Acre could not identify the current worktree.",
+                    exit::NOT_FOUND,
+                )
+            });
+    };
+    let target = resolve_existing_target(repository, state, selector)?;
+    target
+        .existing_worktree
+        .as_ref()
+        .map(|worktree| worktree.path.clone())
+        // Match by target identity: PR number and repository, or branch. Never by an absent branch.
+        .or_else(|| {
+            state
+                .workspace_for_target(&StoredTarget::from(&target))
+                .map(|workspace| workspace.path.clone())
+        })
+        .ok_or_else(|| {
+            AcreError::new(
+                "ACRE_WORKSPACE_NOT_ACTIVE",
+                format!("{selector} does not currently have a workspace."),
+                exit::NOT_FOUND,
+            )
+        })
+}
+
+/// `done` on a worktree Acre has nothing to return: an external one, which is never touched, or
+/// an idle slot, which is already in the pool. A shell standing in it is still moved out.
+fn leave_untouched(
+    context: &CommandContext,
+    config: &AcreConfig,
+    repository: &Repository,
+    state: &RepositoryState,
+    selector: Option<&str>,
+    target_path: &Path,
+    shell_inside: Option<&Path>,
+) -> Result<i32> {
+    // An idle slot has no workspace record, but it is ours.
+    let idle_slot = state.workspace_at(target_path).is_none()
+        && state
+            .slots
+            .iter()
+            .any(|slot| canonical_or_absolute(&slot.path) == canonical_or_absolute(target_path));
+    let renderer = Renderer::new(context);
+    if context.global.json {
+        renderer.json(&serde_json::json!({
+            "ok": true,
+            "action": "done",
+            "external": !idle_slot,
+            "pooled": idle_slot,
+            "retained": !idle_slot,
+            "path": target_path,
+        }));
+        return Ok(exit::SUCCESS);
+    }
+    let directory_name = |path: &Path| path.file_name().and_then(|name| name.to_str()).map(str::to_owned);
+    let name = match shell_inside {
+        Some(_) => directory_name(target_path),
+        None => selector
+            .map(str::to_owned)
+            .or_else(|| target_path.to_str().map(str::to_owned)),
+    };
+    let summary = format!(
+        "<dim>{} {} {}.</dim>",
+        if idle_slot {
+            "Warm slot"
+        } else {
+            "External worktree"
+        },
+        renderer.value(name.as_deref().unwrap_or("worktree")),
+        if idle_slot {
+            "is already in the pool"
+        } else {
+            "was left untouched"
+        },
+    );
+    let Some(shell_directory) = shell_inside else {
+        renderer.line(summary);
+        return Ok(exit::SUCCESS);
+    };
+    let destination = safe_destination(context, config, repository, target_path, shell_directory)?;
+    // Drop our own lease before leaving, or the worktree looks in use forever.
+    if let Some(session_id) = &context.shell.session_id {
+        let _ = release_shell_session_lease(config, repository, session_id);
+    }
+    renderer.line(summary);
+    let label = directory_name(&destination).unwrap_or_else(|| "workspace".to_owned());
+    navigate_direct(
+        context,
+        config,
+        &destination,
+        repository_at(&destination, repository).as_ref(),
+        &label,
+    )?;
+    Ok(exit::SUCCESS)
+}
+
+/// Our own pid and the wrapper shell's are expected in the directory; anything else counts.
+fn assess_options(context: &CommandContext, allowed_session_id: Option<String>) -> AssessOptions {
+    AssessOptions {
+        allowed_session_id,
+        ignored_pids: [Some(std::process::id()), context.shell.pid]
+            .into_iter()
+            .flatten()
+            .collect(),
+    }
 }
 
 pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
@@ -254,7 +278,15 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
         || status.fingerprint != operation.expected_status_fingerprint
     {
         remove_pending_operation(&config, token)?;
-        record_left_workspace(context, &config, &operation, &workspace, &shell_directory, false)?;
+        record_left_workspace(
+            context,
+            &config,
+            &repository,
+            &operation,
+            &workspace,
+            &shell_directory,
+            false,
+        )?;
         return Err(AcreError::new(
             "ACRE_WORKSPACE_CHANGED",
             "The workspace changed while Acre was moving the shell. Acre left it active.",
@@ -266,31 +298,20 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
         &config,
         &repository,
         &workspace.id,
-        &AssessOptions {
-            allowed_session_id: operation.current_session_id.clone(),
-            ignored_pids: [Some(std::process::id()), context.shell.pid]
-                .into_iter()
-                .flatten()
-                .collect(),
-        },
+        &assess_options(context, operation.current_session_id.clone()),
     );
     remove_pending_operation(&config, token)?;
     let returned = result.as_ref().is_ok_and(|result| result.returned);
     record_left_workspace(
         context,
         &config,
+        &repository,
         &operation,
         &workspace,
         &shell_directory,
         returned,
     )?;
-    let result = result?;
-    if !result.returned {
-        render_unsafe(context, &result.assessment);
-        return Ok(exit::REFUSED);
-    }
-    render_done(context, &workspace, &result);
-    Ok(exit::SUCCESS)
+    Ok(render_return(context, &workspace, &result?))
 }
 
 /// Records the shell's move out of the workspace. A returned workspace is a pooled slot now, so
@@ -298,6 +319,7 @@ pub fn resume(context: &CommandContext, token: &str) -> Result<i32> {
 fn record_left_workspace(
     context: &CommandContext,
     config: &AcreConfig,
+    repository: &Repository,
     operation: &PendingDoneOperation,
     workspace: &WorkspaceRecord,
     shell_directory: &Path,
@@ -308,7 +330,14 @@ fn record_left_workspace(
     } else {
         operation.original_directory.as_deref().unwrap_or(&workspace.path)
     };
-    record_shell_move(context, config, from, shell_directory, false)
+    record_shell_move(
+        context,
+        config,
+        from,
+        shell_directory,
+        repository_at(shell_directory, repository).as_ref(),
+        false,
+    )
 }
 
 fn safe_destination(
@@ -351,6 +380,17 @@ fn safe_destination(
     Ok(candidate
         .filter(|candidate| candidate.is_dir())
         .unwrap_or_else(|| primary.path.clone()))
+}
+
+/// Reports how a return went and gives the exit code for it.
+fn render_return(context: &CommandContext, workspace: &WorkspaceRecord, result: &ReturnResult) -> i32 {
+    if result.returned {
+        render_done(context, workspace, result);
+        exit::SUCCESS
+    } else {
+        render_unsafe(context, &result.assessment);
+        exit::REFUSED
+    }
 }
 
 fn render_unsafe(context: &CommandContext, assessment: &DoneAssessment) {

@@ -6,10 +6,10 @@ use std::path::Path;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use tempfile::NamedTempFile;
 
 use crate::error::{AcreError, Result};
 use crate::util::ensure_directory;
-use tempfile::NamedTempFile;
 
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     match fs::read(path) {
@@ -21,6 +21,7 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
         Err(error) => Err(AcreError::io(format!("could not read {}", path.display()), error)),
     }
 }
+
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| AcreError::json(format!("could not encode {}", path.display()), error))?;
@@ -28,6 +29,7 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     bytes.push(b'\n');
     write_atomic(path, &bytes)
 }
+
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     // Replace what a symlink points at, not the link: a config kept in a dotfiles repo stays there.
     let resolved = fs::canonicalize(path).ok();

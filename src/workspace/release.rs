@@ -1,6 +1,6 @@
 //! Returns a workspace: proves it safe, then pools its slot or removes the worktree.
 
-use crate::environment::fingerprint::{EnvironmentPlan, build_environment_plan};
+use crate::environment::fingerprint::EnvironmentPlan;
 use crate::environment::inspect::inspect_environment;
 use crate::environment::outputs::clear_build_outputs;
 use crate::environment::seed::{clear_seed_files, seed_files_only};
@@ -14,7 +14,7 @@ use crate::model::{
 };
 use crate::state::repository::{LockedRepository, save_repository_state};
 use crate::util::now_iso;
-use crate::workspace::assess::{AssessOptions, DoneAssessment, assess_workspace};
+use crate::workspace::assess::{AssessOptions, DoneAssessment, assess_workspace, checked_out_plan};
 use crate::workspace::pool::idle_slot_is_safe;
 use crate::workspace::{lease, missing_workspace};
 
@@ -62,7 +62,8 @@ pub(crate) fn return_workspace_locked(
     if workspace.ownership == WorkspaceOwnership::External {
         forget_workspace(state, &workspace.id);
         locked.save(config)?;
-        let assessment = assess_workspace(&repository, &locked.state, &workspace, config, options)?;
+        let plan = checked_out_plan(&repository, &workspace, config)?;
+        let assessment = assess_workspace(&repository, &locked.state, &workspace, &plan, config, options)?;
         return Ok(ReturnResult {
             assessment,
             returned: false,
@@ -72,7 +73,9 @@ pub(crate) fn return_workspace_locked(
         });
     }
 
-    let assessment = assess_workspace(&repository, state, &workspace, config, options)?;
+    // One plan serves the assessment and the pooling below: both concern the checked-out commit.
+    let plan = checked_out_plan(&repository, &workspace, config)?;
+    let assessment = assess_workspace(&repository, state, &workspace, &plan, config, options)?;
     // Refusing still saves: the lease changes above must stick.
     if !assessment.safe {
         locked.save(config)?;
@@ -85,16 +88,14 @@ pub(crate) fn return_workspace_locked(
         });
     }
 
-    let registered = repository.worktree_at(&workspace.path).ok_or_else(|| {
-        AcreError::new(
+    if repository.worktree_at(&workspace.path).is_none() {
+        return Err(AcreError::new(
             "ACRE_WORKTREE_MISSING",
             "Git no longer knows about this Acre workspace.",
             exit::CONFLICT,
         )
-        .with_details(serde_json::json!({ "path": workspace.path }))
-    })?;
-    // Fingerprint the commit actually checked out, not the one the record remembers.
-    let plan = build_environment_plan(&repository, &registered.head, config)?;
+        .with_details(serde_json::json!({ "path": workspace.path })));
+    }
     let environment = inspect_environment(&workspace.path, &plan)?;
     let slot = slot_to_keep(config, &repository, state, &workspace, &environment);
     let pooled = slot.is_some();

@@ -1,16 +1,17 @@
 //! Decides whether a workspace can be returned: nothing unsaved, nothing unknown, nobody using it.
 
-use crate::environment::fingerprint::build_environment_plan;
+use std::collections::BTreeSet;
+
+use serde::Serialize;
+
+use crate::environment::fingerprint::{EnvironmentPlan, build_environment_plan};
 use crate::environment::roots::unknown_ignored_files;
 use crate::environment::seed::changed_seed_files;
 use crate::error::Result;
-use crate::git::repository::{Repository, discover_repository};
+use crate::git::repository::Repository;
 use crate::git::status::{WorkingTreeStatus, in_progress_operation, read_status};
 use crate::model::{AcreConfig, RepositoryState, TargetKind, WorkspaceLease, WorkspaceRecord};
-use crate::state::repository::load_repository_state;
-use crate::workspace::missing_workspace;
 use crate::workspace::process::{ProcessUse, find_processes_using_path};
-use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,55 +31,54 @@ pub struct DoneAssessment {
     pub reasons: Vec<String>,
 }
 
-/// Loads fresh state and assesses one workspace without taking the repository lock.
-pub fn assess_workspace_for_return(
-    config: &AcreConfig,
-    repository: &Repository,
-    workspace_id: &str,
-    options: &AssessOptions,
-) -> Result<DoneAssessment> {
-    let repository = discover_repository(&repository.top_level)?;
-    let state = load_repository_state(config, &repository)?;
-    let workspace = state
-        .workspaces
-        .iter()
-        .find(|workspace| workspace.id == workspace_id)
-        .ok_or_else(|| missing_workspace(workspace_id))?;
-    assess_workspace(&repository, &state, workspace, config, options)
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct AssessOptions {
     pub allowed_session_id: Option<String>,
     pub ignored_pids: Vec<u32>,
 }
 
+/// The plan for the commit `workspace` has checked out now, which may not be the one it was
+/// opened on: build output and caches belong to the code that is there.
+pub fn checked_out_plan(
+    repository: &Repository,
+    workspace: &WorkspaceRecord,
+    config: &AcreConfig,
+) -> Result<EnvironmentPlan> {
+    let reference = repository
+        .worktree_at(&workspace.path)
+        .map_or("HEAD", |worktree| worktree.head.as_str());
+    build_environment_plan(repository, reference, config)
+}
+
+/// Assesses `workspace` against `plan`, the one [`checked_out_plan`] gives for it.
 pub fn assess_workspace(
     repository: &Repository,
     state: &RepositoryState,
     workspace: &WorkspaceRecord,
+    plan: &EnvironmentPlan,
     config: &AcreConfig,
     options: &AssessOptions,
 ) -> Result<DoneAssessment> {
     let status = read_status(&workspace.path)?;
     let operation = in_progress_operation(&workspace.path)?;
     let registered = repository.worktree_at(&workspace.path);
-    // Build output belongs to the code checked out now, which may not be what was opened.
-    let reference = registered.map_or("HEAD", |worktree| worktree.head.as_str());
-    let plan = build_environment_plan(repository, reference, config)?;
     let cache_roots = match &workspace.environment {
-        Some(environment) => environment.cache_roots.clone(),
+        Some(environment) => &environment.cache_roots,
         // A recovered workspace carries no snapshot, so its approved roots come from its checkout.
-        None => plan.cache_roots,
+        None => &plan.cache_roots,
     };
-    let ignored = unknown_ignored_files(&workspace.path, &cache_roots, &plan.output_roots)?;
-    let baseline: std::collections::BTreeSet<&str> =
-        workspace.baseline_ignored.iter().map(String::as_str).collect();
+    let ignored = unknown_ignored_files(&workspace.path, cache_roots, &plan.output_roots)?;
+    let baseline: BTreeSet<&str> = workspace.baseline_ignored.iter().map(String::as_str).collect();
+    let is_seed = |entry: &str| {
+        workspace
+            .baseline_seed_files
+            .iter()
+            .any(|seed| entry == seed.path || entry.starts_with(&format!("{}/", seed.path)))
+    };
     let new_ignored = ignored
         .into_iter()
         // Ignored data that was there at activation is ours; only new arrivals are unknown.
-        .filter(|entry| !baseline.contains(entry.as_str()) && !workspace.baseline_seed_files.iter().any(|seed|
-            entry == &seed.path || entry.starts_with(&format!("{}/", seed.path))))
+        .filter(|entry| !baseline.contains(entry.as_str()) && !is_seed(entry))
         .collect::<Vec<_>>();
     // An edited .env means the user put something there that no other copy has.
     let changed_seed_files = changed_seed_files(&workspace.path, &workspace.baseline_seed_files)?;

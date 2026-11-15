@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::cli::ShellBridge;
 use crate::error::{AcreError, Result, exit};
 use crate::git::repository::Repository;
+use crate::git::worktrees::find_current_worktree;
 use crate::model::{AcreConfig, RepositoryState, WorkspaceLease, WorkspaceRecord};
 use crate::state::repository::LockedRepository;
 use crate::util::{now_iso, random_id};
@@ -84,7 +85,7 @@ pub fn lease_workspace_by_path(
     let workspace_id = locked
         .state
         .workspace_at(
-            &crate::git::worktrees::find_current_worktree(&locked.repository.worktrees, workspace_path)
+            &find_current_worktree(&locked.repository.worktrees, workspace_path)
                 .map(|worktree| worktree.path)
                 .unwrap_or_else(|| workspace_path.to_path_buf()),
         )

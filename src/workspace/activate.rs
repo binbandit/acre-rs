@@ -22,7 +22,7 @@ use crate::state::paths::trash_root;
 use crate::state::repository::{LockedRepository, save_repository_state};
 use crate::util::{canonical_or_absolute, now_iso, random_short};
 use crate::workspace::lease::{self, LeaseRequest};
-use crate::workspace::pool::{find_environment_source, idle_slot_count, select_slot, source_matches_plan};
+use crate::workspace::pool::{find_environment_source, idle_slot_count, select_slot};
 use crate::workspace::resolve::ResolvedTarget;
 
 #[derive(Debug, Clone)]
@@ -37,17 +37,12 @@ pub struct MaterializedWorkspace {
     pub lease: Option<WorkspaceLease>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct MaterializeOptions {
-    pub lease: Option<LeaseRequest>,
-    pub no_replenish: bool,
-}
-
+/// Opens `target` in a workspace, taking `lease` on it for the caller when one is asked for.
 pub fn materialize_workspace(
     config: &AcreConfig,
     repository: &Repository,
     target: &ResolvedTarget,
-    options: &MaterializeOptions,
+    lease: Option<&LeaseRequest>,
 ) -> Result<MaterializedWorkspace> {
     let started = Instant::now();
     let mut locked = LockedRepository::open(config, repository)?;
@@ -87,10 +82,7 @@ pub fn materialize_workspace(
                     workspace
                 }
             };
-        let lease = options
-            .lease
-            .as_ref()
-            .map(|request| lease::acquire(state, &workspace.id, request));
+        let lease = lease.map(|request| lease::acquire(state, &workspace.id, request));
         locked.save(config)?;
         return Ok(materialized(
             &repository,
@@ -122,10 +114,7 @@ pub fn materialize_workspace(
             )
             .with_details(serde_json::json!({ "branch": target.display_name, "path": active.path })));
         }
-        let lease = options
-            .lease
-            .as_ref()
-            .map(|request| lease::acquire(state, &active.id, request));
+        let lease = lease.map(|request| lease::acquire(state, &active.id, request));
         locked.save(config)?;
         return Ok(materialized(
             &repository,
@@ -176,7 +165,7 @@ pub fn materialize_workspace(
         &repository,
         state,
         target,
-        options,
+        lease,
         &plan,
         slot,
         &active_path,
@@ -197,8 +186,7 @@ pub fn materialize_workspace(
             return Err(error);
         }
     };
-    let replenish =
-        config.pool.replenish && !options.no_replenish && idle_slot_count(state) < config.pool.min_slots;
+    let replenish = config.pool.replenish && idle_slot_count(state) < config.pool.min_slots;
     // Release the lock before spawning: the replenisher needs it.
     drop(locked);
     if replenish {
@@ -223,7 +211,7 @@ fn activate(
     repository: &Repository,
     state: &mut RepositoryState,
     target: &ResolvedTarget,
-    options: &MaterializeOptions,
+    lease: Option<&LeaseRequest>,
     plan: &EnvironmentPlan,
     mut slot: WorkspaceSlot,
     active_path: &Path,
@@ -248,9 +236,9 @@ fn activate(
             ..inspect_environment(active_path, plan)?
         }
     } else if let Some(source) = find_environment_source(config, repository, state, plan, active_path) {
-        match prepare_environment(&source, active_path, plan)
+        match prepare_environment(&source.path, active_path, plan)
             .ok()
-            .filter(|_| source_matches_plan(config, repository, &source, plan))
+            .filter(|_| source.is_unchanged())
             .and_then(|prepared| prepared.publish(active_path, plan).ok())
         {
             Some(snapshot) => snapshot,
@@ -301,10 +289,7 @@ fn activate(
         // A stale record for this path (a broken earlier activation) would shadow the new one.
         .retain(|candidate| canonical_or_absolute(&candidate.path) != active_key);
     state.workspaces.push(workspace.clone());
-    let lease = options
-        .lease
-        .as_ref()
-        .map(|request| lease::acquire(state, &workspace.id, request));
+    let lease = lease.map(|request| lease::acquire(state, &workspace.id, request));
     // Saved inside the fallible section on purpose: if this fails, the rollback still runs.
     save_repository_state(config, repository, state)?;
     Ok((workspace, lease))

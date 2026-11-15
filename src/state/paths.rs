@@ -6,7 +6,7 @@ use crate::error::{AcreError, Result, exit};
 use crate::git::repository::Repository;
 use crate::model::{AcreConfig, RepositoryState};
 use crate::state::storage::read_json;
-use crate::util::{absolute, expand_home, home_dir};
+use crate::util::{absolute, expand_home, home_dir, is_inside};
 
 pub fn default_acre_root() -> PathBuf {
     home_dir().join(".acre")
@@ -56,8 +56,8 @@ pub fn repository_root(config: &AcreConfig, repository: &Repository) -> PathBuf 
             return path;
         }
         if repository.worktrees.iter().any(|worktree| {
-            crate::util::is_inside(&path.join("workspaces"), &worktree.path)
-                || crate::util::is_inside(&path.join("slots"), &worktree.path)
+            is_inside(&path.join("workspaces"), &worktree.path)
+                || is_inside(&path.join("slots"), &worktree.path)
         }) {
             // Recovery must still find older directories whose state was lost or corrupted.
             return path;

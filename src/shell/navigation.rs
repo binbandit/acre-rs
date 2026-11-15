@@ -1,5 +1,6 @@
 //! Moves the parent shell: chooses the matching directory inside a target and writes the directive.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::cli::CommandContext;
@@ -38,10 +39,12 @@ pub fn navigation_destination(
     }
 }
 
+/// Moves the shell to `destination`, which lies in `repository` when it is inside one at all.
 pub fn navigate_direct(
     context: &CommandContext,
     config: &AcreConfig,
     destination: &Path,
+    repository: Option<&Repository>,
     label: &str,
 ) -> Result<()> {
     if !context.shell.active {
@@ -55,7 +58,14 @@ pub fn navigate_direct(
             "hint": "acre setup",
         })));
     }
-    record_shell_move(context, config, &shell_directory(context), destination, false)?;
+    record_shell_move(
+        context,
+        config,
+        &shell_directory(context),
+        destination,
+        repository,
+        false,
+    )?;
     let renderer = Renderer::new(context);
     renderer.line(format!(
         "<green>→</green> <bold><blue>{}</blue></bold>",
@@ -77,13 +87,27 @@ pub fn shell_directory(context: &CommandContext) -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| context.cwd.clone())
 }
 
-/// Keep navigation responsive when another operation holds a repository lock. History is
-/// durable; lease updates use the same best-effort behavior as the previous-location shortcut.
+/// The repository holding `path`: `known` when the path is inside it, otherwise whatever Git
+/// finds there, which is nothing for a plain directory.
+pub fn repository_at(path: &Path, known: &Repository) -> Option<Repository> {
+    if known.contains(path) {
+        Some(known.clone())
+    } else {
+        discover_repository(path).ok()
+    }
+}
+
+/// Records the shell's move in its history and moves its lease along: released in a repository
+/// it leaves, taken on the workspace it lands in. `destination` is the repository holding `to`.
+///
+/// Lease updates are best effort so navigation stays responsive while another operation holds a
+/// repository lock; history is always written.
 pub fn record_shell_move(
     context: &CommandContext,
     config: &AcreConfig,
     from: &Path,
     to: &Path,
+    destination: Option<&Repository>,
     destination_leased: bool,
 ) -> Result<()> {
     let Some(session) = context
@@ -94,14 +118,16 @@ pub fn record_shell_move(
     else {
         return Ok(());
     };
-    let destination = discover_repository(to).ok();
-    let previous = read_shell_state(config, session)?.and_then(|state| state.current_directory);
-    let mut released = std::collections::BTreeSet::new();
-    for source in previous.as_deref().into_iter().chain(std::iter::once(from)) {
+    // The session's lease may sit where Acre last put the shell rather than where it stands now.
+    let recorded = read_shell_state(config, session)?.and_then(|state| state.current_directory);
+    let mut released = BTreeSet::new();
+    for source in recorded.as_deref().into_iter().chain([from]) {
+        // Moving within one repository keeps the lease there; it is replaced below.
+        if destination.is_some_and(|repository| repository.contains(source)) {
+            continue;
+        }
         if let Ok(repository) = discover_repository(source)
-            && destination
-                .as_ref()
-                .is_none_or(|target| target.common_dir != repository.common_dir)
+            && destination.is_none_or(|target| target.common_dir != repository.common_dir)
             && released.insert(repository.common_dir.clone())
         {
             let _ = release_shell_session_lease(config, &repository, session);
@@ -110,7 +136,7 @@ pub fn record_shell_move(
     if !destination_leased
         && let (Some(repository), Some(request)) = (destination, LeaseRequest::for_shell(&context.shell))
     {
-        let _ = lease_workspace_by_path(config, &repository, to, &request);
+        let _ = lease_workspace_by_path(config, repository, to, &request);
     }
     record_navigation(config, session, from, to, context.shell.pid)
 }

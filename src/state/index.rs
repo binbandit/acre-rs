@@ -18,6 +18,19 @@ struct RepositoryIndex {
 }
 
 pub fn remember_repository(config: &AcreConfig, repository: &Repository) -> Result<()> {
+    // Every open comes through here, and almost every one finds the repository already recorded.
+    let recorded = |repositories: &[KnownRepository]| {
+        repositories.iter().any(|record| {
+            record.id == repository.id
+                && record.name == repository.name
+                && record.common_dir == repository.common_dir
+                && record.top_level == repository.top_level
+                && record.remote_url == repository.remote_url
+        })
+    };
+    if recorded(&load_repository_index(config)?) {
+        return Ok(());
+    }
     let _lock = RepositoryLock::acquire(&repository_index_path(config).with_extension("lock"))?;
     let mut repositories = load_repository_index(config)?;
     // Replace rather than append, so a moved checkout updates its paths.

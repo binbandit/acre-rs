@@ -1,24 +1,25 @@
 //! The command-line surface: clap definitions, the per-invocation context, and dispatch to handlers.
 
-use crate::util::canonical_or_absolute;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
 use crate::commands;
-use crate::error::{AcreError, Result};
+use crate::error::{AcreError, Result, exit};
 use crate::shell::SupportedShell;
+use crate::state::paths::validate_state_id;
 use crate::ui::errors::render_failure;
+use crate::util::canonical_or_absolute;
 
 #[derive(Debug, Clone)]
 pub struct GlobalOptions {
-    pub directory: Option<PathBuf>,
     pub json: bool,
     pub no_color: bool,
     pub plain: bool,
     pub verbose: bool,
 }
+
 #[derive(Debug, Clone)]
 pub struct ShellBridge {
     pub active: bool,
@@ -26,6 +27,7 @@ pub struct ShellBridge {
     pub session_id: Option<String>,
     pub pid: Option<u32>,
 }
+
 #[derive(Debug, Clone)]
 pub struct CommandContext {
     pub cwd: PathBuf,
@@ -289,7 +291,7 @@ pub fn run() -> i32 {
             &AcreError::new(
                 "ACRE_INVALID_ARGUMENT",
                 "a target cannot be combined with a subcommand",
-                crate::error::exit::USAGE,
+                exit::USAGE,
             ),
         );
     }
@@ -314,7 +316,7 @@ pub fn run() -> i32 {
 
 fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
     if let Some(id) = &context.shell.session_id {
-        crate::state::paths::validate_state_id(id)?;
+        validate_state_id(id)?;
     }
     match cli.command {
         None => commands::open::run(context, cli.target.as_deref(), &cli.program),
@@ -354,7 +356,7 @@ fn dispatch(context: &CommandContext, cli: Cli) -> Result<i32> {
         },
         Some(Command::Completion(args)) => commands::shell::completion(context, args.shell),
         Some(Command::SessionId) => commands::internal::session_id(context),
-        Some(Command::Resume { token }) => commands::internal::resume(context, &token),
+        Some(Command::Resume { token }) => commands::done::resume(context, &token),
         Some(Command::Replenish { common_dir }) => commands::internal::replenish(context, &common_dir),
         Some(Command::Purge { common_dir }) => commands::internal::purge(context, &common_dir),
         Some(Command::Complete { token }) => {
@@ -380,7 +382,6 @@ fn create_context(cli: &Cli, cwd: PathBuf) -> CommandContext {
             && std::io::IsTerminal::is_terminal(&std::io::stdin())
             && std::io::IsTerminal::is_terminal(&std::io::stdout()),
         global: GlobalOptions {
-            directory: cli.directory.clone(),
             json: cli.json,
             no_color: cli.no_color,
             plain: cli.plain,

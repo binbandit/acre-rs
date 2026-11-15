@@ -1,5 +1,6 @@
 //! Bare `acre` and `acre <target>`: pick or resolve a target and open it.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 
 use crate::cli::CommandContext;
@@ -16,7 +17,7 @@ use crate::state::shell::read_shell_state;
 use crate::ui::output::Renderer;
 use crate::ui::picker::{PickerResult, PickerRow, pick};
 use crate::util::canonical_or_absolute;
-use crate::workspace::activate::{MaterializeOptions, materialize_workspace};
+use crate::workspace::activate::materialize_workspace;
 use crate::workspace::lease::{LeaseRequest, release_workspace_lease};
 use crate::workspace::resolve::resolve_existing_target;
 
@@ -60,18 +61,19 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
             );
             return Ok(exit::SUCCESS);
         }
+        let repository = discover_repository(&previous).ok();
         // Workspace directories are named by slot id, so the branch there is the better name.
-        let label = discover_repository(&previous)
-            .ok()
-            .and_then(|repository| repository.current_worktree)
-            .and_then(|worktree| worktree.branch)
+        let label = repository
+            .as_ref()
+            .and_then(|repository| repository.current_worktree.as_ref())
+            .and_then(|worktree| worktree.branch.clone())
             .or_else(|| {
                 previous
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
             })
             .unwrap_or_else(|| "previous location".to_owned());
-        navigate_direct(context, &config, &previous, &label)?;
+        navigate_direct(context, &config, &previous, repository.as_ref(), &label)?;
         return Ok(exit::SUCCESS);
     }
 
@@ -109,15 +111,7 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
             session_id: None,
         })
     };
-    let materialized = materialize_workspace(
-        &config,
-        &repository,
-        &target,
-        &MaterializeOptions {
-            lease,
-            no_replenish: false,
-        },
-    )?;
+    let materialized = materialize_workspace(&config, &repository, &target, lease.as_ref())?;
 
     if !child_argv.is_empty() {
         let executable = child_argv[0].to_string_lossy().into_owned();
@@ -128,13 +122,13 @@ pub fn run(context: &CommandContext, selector: Option<&str>, child_argv: &[OsStr
         }
         return status;
     }
-    let _ = navigate_to_materialized(context, &config, &materialized)?;
+    navigate_to_materialized(context, &config, &materialized)?;
     Ok(exit::SUCCESS)
 }
 
 fn picker_rows(repository: &Repository, state: &RepositoryState) -> Result<Vec<PickerRow<String>>> {
     let mut rows = Vec::new();
-    let mut used = std::collections::BTreeSet::new();
+    let mut used = BTreeSet::new();
     for worktree in &repository.worktrees {
         // Idle pool slots are infrastructure, not work; picking one would pull it out of the pool.
         let pooled = state.slots.iter().any(|slot| {
@@ -184,7 +178,7 @@ fn picker_rows(repository: &Repository, state: &RepositoryState) -> Result<Vec<P
         .iter()
         .filter(|reference| reference.kind == GitRefKind::Local)
         .map(|reference| reference.short_name.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<BTreeSet<_>>();
     for reference in refs
         .iter()
         .filter(|reference| {

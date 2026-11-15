@@ -248,7 +248,6 @@ mod tests {
             cwd: Default::default(),
             interactive: true,
             global: GlobalOptions {
-                directory: None,
                 json: false,
                 no_color: true,
                 plain,
