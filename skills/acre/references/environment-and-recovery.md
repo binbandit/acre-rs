@@ -41,7 +41,7 @@ User configuration can be updated with `acre config set <dotted-key> <json-or-st
 
 For repository-specific environment rules, `acre -C /path/to/repo config repo-init` creates `.acre.json`. Read an existing file before editing it; do not force-overwrite it. Its `environment` object supports `cacheRoots`, `requiredRoots`, `outputRoots`, `seedFiles`, and `excludedRoots`. Use repository-relative paths and keep seed paths separate from cache and output paths. Roots match nested projects too, and a name such as `*.tsbuildinfo` matches by suffix.
 
-Cache roots are reusable dependency or build caches that are kept for the next branch. Output roots are build output that `done` deletes, such as `storybook-static`. Built-ins already cover `.next`, `next-env.d.ts`, `out`, `dist`, `coverage`, and `*.tsbuildinfo` in Node projects. Add either kind only for reproducible, disposable outputs. Do not approve a broad ignored directory containing user data or secrets just to make `done` succeed. Unknown keys, duplicate paths, and overlapping seed/cache paths are rejected. In automation use `config set` rather than interactive `config edit`.
+Cache roots are reusable dependency or build caches that are kept for the next branch. Output roots are build output that `done` deletes, such as `storybook-static`. Built-ins already cover the usual build output and tool caches of JavaScript, Python, Rust, and Go projects, such as `dist`, `build`, `coverage`, `.next`, `.svelte-kit`, `*.egg-info`, and `bin`; `docs/ENVIRONMENTS.md` lists them. Add either kind only for reproducible, disposable outputs. Do not approve a broad ignored directory containing user data or secrets just to make `done` succeed. Unknown keys, duplicate paths, and overlapping seed/cache paths are rejected. In automation use `config set` rather than interactive `config edit`.
 
 ## Diagnose a refusal
 
@@ -57,6 +57,6 @@ Start with the actual error or release assessment, then inspect the affected che
 | Busy/conflicting repository state | Inspect the competing operation. Retry after it finishes; avoid rapid or indefinite retries. Persistent lock files are normal OS-lock anchors, not evidence of a stale lock. |
 | Unreadable/broken state | Inspect with `doctor`; use `system repair` when state recovery is the intended action. Repair preserves unreadable state for inspection and reconstructs conservatively from Git. |
 
-`system gc` removes eligible unused infrastructure after safety assessment. It is not a way to bypass a retained workspace. Process-inspection failures on macOS/Linux retain workspaces; Windows lacks a working-directory process scanner, so lease discipline remains important.
+`system gc` removes eligible unused infrastructure after safety assessment. It is not a way to bypass a retained workspace. A failed process scan on macOS/Linux retains workspaces; Windows lacks a working-directory process scanner, so lease discipline remains important.
 
 JSON failures have `error.code`, `error.message`, and `error.details`. Exit classes are 1 internal, 2 usage/configuration, 3 environment unavailable, 4 target not found, 5 conflict, 6 safe refusal, 7 Git, 8 network/provider, and 130 interruption. A successful release can still report retention; do not use exit code 0 as proof of recycling. Exit 194 and the `__resume` protocol belong to shell integration, not machine clients.

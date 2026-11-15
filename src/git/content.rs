@@ -6,12 +6,8 @@ use std::path::Path;
 use crate::error::{AcreError, Result, exit};
 use crate::git::runner::{RunOptions, run_git, run_git_with};
 
-/// Reads matching manifest names at every depth, including workspace packages.
-pub fn read_matching_files_at_ref(
-    cwd: &Path,
-    reference: &str,
-    names: &[&str],
-) -> Result<BTreeMap<String, Vec<u8>>> {
+/// Lists the files with one of `names` at every depth, including workspace packages.
+pub fn list_matching_files_at_ref(cwd: &Path, reference: &str, names: &[&str]) -> Result<Vec<String>> {
     let listing = run_git(cwd, &["ls-tree", "-r", "--name-only", "-z", reference])?;
     let mut paths = Vec::new();
     for path in listing.stdout.split(|byte| *byte == 0) {
@@ -29,12 +25,13 @@ pub fn read_matching_files_at_ref(
                     exit::REFUSED,
                 )
             })?;
-        paths.push(path);
+        paths.push(path.to_owned());
     }
-    read_files_at_ref(cwd, reference, &paths)
+    Ok(paths)
 }
 
-pub fn read_files_at_ref(cwd: &Path, reference: &str, files: &[&str]) -> Result<BTreeMap<String, Vec<u8>>> {
+/// Reads blobs, or the tree object of a directory, at a commit. Paths missing there are left out.
+pub fn read_files_at_ref(cwd: &Path, reference: &str, files: &[String]) -> Result<BTreeMap<String, Vec<u8>>> {
     if files.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -57,7 +54,7 @@ pub fn read_files_at_ref(cwd: &Path, reference: &str, files: &[&str]) -> Result<
     Ok(parse_batch(&result.stdout, files))
 }
 
-fn parse_batch(output: &[u8], files: &[&str]) -> BTreeMap<String, Vec<u8>> {
+fn parse_batch(output: &[u8], files: &[String]) -> BTreeMap<String, Vec<u8>> {
     let mut values = BTreeMap::new();
     let mut offset = 0;
     for file in files {
@@ -83,7 +80,7 @@ fn parse_batch(output: &[u8], files: &[&str]) -> BTreeMap<String, Vec<u8>> {
         if offset + size > output.len() {
             break;
         }
-        values.insert((*file).to_owned(), output[offset..offset + size].to_vec());
+        values.insert(file.clone(), output[offset..offset + size].to_vec());
         // Skip the newline git appends after each body.
         offset = (offset + size + 1).min(output.len());
     }
@@ -97,7 +94,7 @@ mod tests {
     #[test]
     fn reads_present_blobs_and_skips_missing_ones() {
         let output = b"abc123 blob 5\nhello\nHEAD:package.json missing\n";
-        let files = parse_batch(output, &["README.md", "package.json"]);
+        let files = parse_batch(output, &["README.md".to_owned(), "package.json".to_owned()]);
         assert_eq!(files.get("README.md").map(Vec::as_slice), Some(&b"hello"[..]));
         assert!(!files.contains_key("package.json"));
     }

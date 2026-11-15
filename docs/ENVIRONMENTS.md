@@ -35,17 +35,20 @@ For Node projects, `node_modules` is normally required. Rust’s `target` direct
 
 | Ecosystem | Fingerprint files | Cache roots | Required roots | Build output |
 |---|---|---|---|---|
-| pnpm | `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc`, `.pnpmfile.cjs` | `node_modules` | `node_modules` | `dist`, `coverage`, `*.tsbuildinfo` |
-| Yarn | `package.json`, `yarn.lock`, `.yarnrc`, `.yarnrc.yml` | `node_modules`, `.yarn/cache`, `.yarn/unplugged`, `.yarn/install-state.gz`, `.yarn/build-state.yml`, `.pnp.cjs`, `.pnp.loader.mjs`, `.pnp.data.json` | `node_modules` | `dist`, `coverage`, `*.tsbuildinfo` |
-| npm | `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `.npmrc` | `node_modules` | `node_modules` | `dist`, `coverage`, `*.tsbuildinfo` |
-| Bun | `package.json`, `bun.lock`, `bun.lockb`, `bunfig.toml` | `node_modules` | `node_modules` | `dist`, `coverage`, `*.tsbuildinfo` |
+| JavaScript, with any package manager below | `package.json` | `.eslintcache`, `.stylelintcache`, `.cache`, `.parcel-cache`, `.swc`, `.rollup.cache`, `.angular/cache`, `.nx/cache`, `.vitepress/cache` | none | `dist`, `build`, `coverage`, `.nyc_output`, `*.lcov`, `*.tsbuildinfo`, `*.log`, `*.tgz`, `storybook-static`, `playwright-report`, `test-results`, `.output`, `.nuxt`, `.svelte-kit`, `.astro`, `.docusaurus`, `.expo`, `.vinxi`, `.react-router`, `.vercel/output`, `.vitepress/dist`, `.nx` |
+| pnpm | `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc`, `.pnpmfile.cjs` | `node_modules` | `node_modules` | none |
+| Yarn | `yarn.lock`, `.yarnrc`, `.yarnrc.yml` | `node_modules`, `.yarn/cache`, `.yarn/unplugged`, `.yarn/install-state.gz`, `.yarn/build-state.yml`, `.pnp.cjs`, `.pnp.loader.mjs`, `.pnp.data.json` | `node_modules` | none |
+| npm | `package-lock.json`, `npm-shrinkwrap.json`, `.npmrc` | `node_modules` | `node_modules` | none |
+| Bun | `bun.lock`, `bun.lockb`, `bunfig.toml` | `node_modules` | `node_modules` | none |
 | Turborepo | `package.json`, `turbo.json` | `.turbo` | none | none |
 | Next.js | `package.json`, `next.config.*` | `.next/cache` | none | `.next`, `next-env.d.ts`, `out` |
-| Rust | `Cargo.toml`, `Cargo.lock`, toolchain files | `target` | none | none |
-| Python | `pyproject.toml`, `uv.lock`, Poetry, requirements, Pipenv, and setuptools files | `.venv`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache` | `.venv` | none |
-| Go | `go.mod`, `go.sum`, `go.work`, `go.work.sum` | none by default | none | none |
+| Rust | `Cargo.toml`, `Cargo.lock`, toolchain files | `target` | none | `*.rs.bk`, `*.profraw` |
+| Python | `pyproject.toml`, `uv.lock`, Poetry, requirements, Pipenv, and setuptools files | `.venv`, `venv`, `.tox`, `.nox`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.hypothesis`, `.pytype`, `.pyre` | `.venv` | `build`, `dist`, `*.egg-info`, `.eggs`, `.pdm-build`, `htmlcov`, `.coverage`, `coverage.xml`, `.dmypy.json`, `*.log` |
+| Go | `go.mod`, `go.sum`, `go.work`, `go.work.sum` | none: Go's caches live outside the repository | none | `bin`, `dist`, `*.test`, `*.out`, `*.coverprofile` |
 
-Every repository also treats `.DS_Store` and `Thumbs.db`, which file managers leave behind, as build output.
+Every repository also treats `.DS_Store`, `Thumbs.db`, and `desktop.ini`, which file managers leave behind, as build output.
+
+The lists follow what each ecosystem's standard `.gitignore` template expects its tools to generate. Tool caches keyed by content stay with the slot; anything built from one branch's code is removed with it. A name only ever matches a Git-ignored path, so a tracked `build/` directory is never touched. Editor state such as `.idea` and `.vscode`, swap files, local databases, and anything else that can hold work is deliberately absent: it still blocks `done` until you decide what happens to it.
 
 Built-ins can be extended in user config or `.acre.json` with `cacheRoots`, `requiredRoots`, `outputRoots`, and `seedFiles`, and removed with `excludedRoots`. Paths are data only and must remain repository-relative.
 
@@ -112,6 +115,6 @@ The cold cost is normally paid once per generation per slot, while matching bran
 
 Acre keeps each workspace at a fixed directory through activation, return, and reuse. This preserves installation paths in Python environments and other caches. Directories identify slots; branch names remain visible in Acre but no longer determine the directory name.
 
-Python virtual environments containing `pyvenv.cfg` are reused only in place. Acre skips them when copying caches from another checkout, because their scripts and installed packages may embed absolute paths. Create the environment using the project's normal install command in each concurrent workspace; later matching branches reuse it at that same path. Acre does not run installers or rewrite environment contents automatically. See [Python's venv portability guidance](https://docs.python.org/3/library/venv.html#how-venvs-work).
+Python virtual environments containing `pyvenv.cfg` are reused only in place, as are `.tox` and `.nox`, which hold one environment per directory. Acre skips them when copying caches from another checkout, because their scripts and installed packages may embed absolute paths. Create the environment using the project's normal install command in each concurrent workspace; later matching branches reuse it at that same path. Acre does not run installers or rewrite environment contents automatically. See [Python's venv portability guidance](https://docs.python.org/3/library/venv.html#how-venvs-work).
 
 Existing workspace paths are preserved on upgrade. Environments already copied or moved by an earlier Acre version may need to be recreated once. Other cache roots are copied as configured; applications that embed absolute paths in those caches remain responsible for their portability. A `ready` snapshot verifies required-root presence, not the health of every installed package.

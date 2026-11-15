@@ -22,7 +22,7 @@ cargo build --release --locked
 ## What is exercised by hand
 
 - Pull request resolution needs `gh` and a GitHub remote.
-- Process detection is platform specific: `lsof` on macOS, `/proc` on Linux, nothing on Windows.
+- Process detection reads each process's working directory from the kernel on macOS and Linux; Windows has no scanner.
 - The generated shell functions themselves run inside a real interactive shell; the tests exercise the directive protocol beneath them.
 
 ## Performance playground
@@ -69,7 +69,8 @@ eval "$("$ACRE_EXECUTABLE" shell init zsh)"
 Remove the printed playground directory when finished.
 
 The integration tests also verify that navigation completes while a repository lock remains
-held, moves leases correctly between repositories, and that pool selection skips unsafe
+held, that a command waits for a briefly held lock instead of failing, that leases move
+correctly between repositories, and that pool selection skips unsafe
 preferred slots without scanning unused candidates. Creation must use exact ref lookups
 instead of enumerating every branch, while preserving local, remote, explicit, and fresh bases.
 These check the cause of the regression without imposing tight machine-dependent timings.
@@ -89,6 +90,6 @@ CI audits the committed lockfile against RustSec on pull requests, main pushes, 
 
 `tests/regressions.rs` exercises the safety, state identity, selector, environment, and output fixes through the CLI on every CI platform. They also cover `done` with a directory override, landing in the same subdirectory after returning a workspace without keeping the pooled slot in history, `done pr:N` matching only that pull request, Git environment variables exported by hooks, unreadable state and its repair, bare-repository layouts, directories Git cannot read, deleted worktree registrations, remote names containing slashes, and directory seed normalization. Integration tests run Git with no global or system configuration. The replenishment suite also changes the source manifests and caches while a real background copy is paused, then verifies the incompatible copy is discarded.
 
-On macOS, run `python3 tests/audit_regressions.py target/debug/acre` after building. CI runs these 41 additional regressions with the system Bash and Zsh, Node/npm, and `gh`. Fixtures isolate Git configuration, Acre state, and setup home directories. GitHub replies are stubbed; the real Enterprise routing probe uses placeholder credentials and a local proxy that refuses forwarding. Failed process probes are injected deliberately. Real child processes also verify detection in directories containing newlines, backslashes, control characters, and Unicode. Seed tests cover repeated separators and directory-only ignore rules, and provider tests cover owners and repositories named `pull`. The runner returns nonzero on any failure and prints the directory containing subprocess transcripts.
+On macOS, run `python3 tests/audit_regressions.py target/debug/acre` after building. CI runs these 40 additional regressions with the system Bash and Zsh, Node/npm, and `gh`. Fixtures isolate Git configuration, Acre state, and setup home directories. GitHub replies are stubbed; the real Enterprise routing probe uses placeholder credentials and a local proxy that refuses forwarding. A failed PID probe is injected deliberately. Real child processes also verify detection in directories containing newlines, backslashes, control characters, and Unicode. Seed tests cover repeated separators and directory-only ignore rules, and provider tests cover owners and repositories named `pull`. The runner returns nonzero on any failure and prints the directory containing subprocess transcripts.
 
 The package-rename regression refreshes the trusted primary installation and verifies that opening a new generation replaces old workspace links and successfully imports the renamed package. The pnpm regression removes the primary cache to isolate invalidation of the old pool generation. Neither test treats directory-presence readiness as proof of installed-package health.

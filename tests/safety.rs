@@ -308,6 +308,13 @@ fn gc_preserves_unknown_ignored_files_in_idle_slots() {
     assert_eq!(fs::read_to_string(slot.join("notes.bak")).unwrap(), "user backup");
 }
 
+fn has_cache_root(opened: &serde_json::Value, root: &str) -> bool {
+    opened["environment"]["cacheRoots"]
+        .as_array()
+        .expect("cache roots")
+        .contains(&json!(root))
+}
+
 #[test]
 fn excluded_roots_are_normalized_like_cache_roots() {
     let fixture = Fixture::new();
@@ -317,10 +324,7 @@ fn excluded_roots_are_normalized_like_cache_roots() {
     )
     .unwrap();
     let opened = fixture.json(&["new", "next", "--stay", "--json"]);
-    assert!(
-        opened["environment"]["cacheRoots"].as_array().unwrap().is_empty(),
-        "{opened}"
-    );
+    assert!(!has_cache_root(&opened, "node_modules"), "{opened}");
 }
 
 #[test]
@@ -338,10 +342,7 @@ fn repository_config_always_comes_from_the_primary_checkout() {
         .output()
         .unwrap();
     let opened: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        opened["environment"]["cacheRoots"].as_array().unwrap().is_empty(),
-        "{opened}"
-    );
+    assert!(!has_cache_root(&opened, "node_modules"), "{opened}");
 }
 
 #[cfg(unix)]

@@ -69,10 +69,7 @@ fn timeout_still_applies_after_output_pipes_close() {
 #[cfg(unix)]
 #[test]
 fn timeout_includes_output_inherited_by_descendants() {
-    use acre::git::runner::{RunOptions, run_process};
-    use std::time::{Duration, Instant};
-
-    let started = Instant::now();
+    let started = std::time::Instant::now();
     let result = run_process(
         "sh",
         &["-c", "sleep 2 & exit 0"],
@@ -88,9 +85,7 @@ fn timeout_includes_output_inherited_by_descendants() {
 #[cfg(unix)]
 #[test]
 fn large_input_and_output_do_not_deadlock() {
-    use acre::git::runner::{RunOptions, run_process};
     use std::sync::mpsc;
-    use std::time::Duration;
 
     let (send, receive) = mpsc::channel();
     std::thread::spawn(move || {

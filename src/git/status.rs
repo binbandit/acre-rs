@@ -2,10 +2,11 @@
 
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{AcreError, Result, exit};
 use crate::git::runner::{ProcessResult, RunOptions, run_git, run_git_with};
 use crate::util::sha256;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

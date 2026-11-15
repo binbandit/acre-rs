@@ -58,6 +58,7 @@ pub fn seed_files_only(
     }
     Ok(())
 }
+
 /// A relative seed link resolves from wherever it sits. Kept as is when it still resolves from
 /// the workspace, such as into the checkout's own tracked config; otherwise it points at what it
 /// reached from the primary, instead of dangling in the workspace.
@@ -83,6 +84,7 @@ pub fn clear_seed_files(root: &Path, files: &[String]) -> Result<()> {
     }
     Ok(())
 }
+
 pub fn snapshot_seed_files(root: &Path, files: &[String]) -> Result<Vec<SeedFileSnapshot>> {
     let mut snapshots = Vec::new();
     for relative in files {

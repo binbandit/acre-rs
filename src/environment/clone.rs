@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::environment::fingerprint::EnvironmentPlan;
 use crate::environment::inspect::inspect_environment;
 use crate::environment::roots::{inspect_ignored, overlaps_seed};
-use crate::error::{AcreError, Result};
+use crate::error::{AcreError, Result, exit};
 use crate::git::status::is_ignored_path;
 use crate::model::{CloneMode, EnvironmentSnapshot};
 use crate::util::{ensure_directory, has_symlink_parent, remove_path};
@@ -42,7 +42,7 @@ pub fn prepare_environment(
         }
         let source = source_root.join(&cache_root);
         // Virtual environments embed their installation path and cannot be relocated.
-        if source.join("pyvenv.cfg").symlink_metadata().is_ok()
+        if holds_virtual_environment(&source)
             || destination_root.join(&cache_root).symlink_metadata().is_ok()
             || has_symlink_parent(destination_root, Path::new(&cache_root))?
             || !is_ignored_path(destination_root, &ignore_query(&cache_root, &source))?
@@ -95,6 +95,14 @@ impl PreparedEnvironment {
     }
 }
 
+/// Whether `root` is a Python virtual environment, or a directory of them as `.tox` and `.nox` are.
+fn holds_virtual_environment(root: &Path) -> bool {
+    let is_environment = |path: &Path| path.join("pyvenv.cfg").symlink_metadata().is_ok();
+    is_environment(root)
+        || fs::read_dir(root)
+            .is_ok_and(|entries| entries.flatten().any(|entry| is_environment(&entry.path())))
+}
+
 /// A trailing slash lets directory-only ignore rules such as `node_modules/` match; a file
 /// cache root such as `.pnp.cjs` is asked about as a file.
 fn ignore_query(cache_root: &str, example: &Path) -> String {
@@ -142,7 +150,7 @@ pub fn copy_path(source: &Path, destination: &Path) -> Result<()> {
         return Err(AcreError::new(
             "ACRE_UNSUPPORTED_FILE",
             format!("Cannot copy special file {}", source.display()),
-            crate::error::exit::REFUSED,
+            exit::REFUSED,
         ));
     }
     fs::copy(source, destination)

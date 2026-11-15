@@ -1,8 +1,9 @@
 //! The environment plan: detected ecosystems, cache roots, seed files, and the generation fingerprint.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use serde_json::{Map, Value, json};
 
@@ -11,7 +12,7 @@ use crate::environment::definitions::{
 };
 use crate::environment::roots::is_within_root;
 use crate::error::{AcreError, Result, exit};
-use crate::git::content::{read_files_at_ref, read_matching_files_at_ref};
+use crate::git::content::{list_matching_files_at_ref, read_files_at_ref};
 use crate::git::repository::Repository;
 use crate::model::AcreConfig;
 use crate::state::config::load_repo_config;
@@ -19,15 +20,15 @@ use crate::util::{sha256, unique_paths};
 
 #[derive(Debug, Clone)]
 pub struct EnvironmentPlan {
+    /// The commit the plan was read from, as the caller named it.
+    pub reference: String,
     pub fingerprint: String,
-    pub ecosystem_ids: Vec<String>,
     pub cache_roots: Vec<String>,
     pub required_roots: Vec<String>,
     /// Build output removed when a workspace returns. Never stored in a slot, so it is not
     /// part of the fingerprint.
     pub output_roots: Vec<String>,
     pub seed_files: Vec<String>,
-    pub platform_key: String,
 }
 
 pub fn build_environment_plan(
@@ -36,7 +37,15 @@ pub fn build_environment_plan(
     config: &AcreConfig,
 ) -> Result<EnvironmentPlan> {
     // Read from the commit, not the worktree: the fingerprint must not depend on uncommitted edits.
-    let files = read_matching_files_at_ref(&repository.top_level, reference, ALL_FINGERPRINT_FILES)?;
+    let manifests = list_matching_files_at_ref(&repository.top_level, reference, ALL_FINGERPRINT_FILES)?;
+    let patch_directories = patch_directories(&manifests);
+    let requested: Vec<String> = manifests.iter().chain(&patch_directories).cloned().collect();
+    let mut files = read_files_at_ref(&repository.top_level, reference, &requested)?;
+    // What remains in `files` after this is the manifests alone.
+    let patches: BTreeMap<String, Vec<u8>> = patch_directories
+        .into_iter()
+        .filter_map(|directory| files.remove(&directory).map(|tree| (directory, tree)))
+        .collect();
     let detected = detect_ecosystems(&files);
     let ecosystems: Vec<EcosystemDefinition> = detected
         .iter()
@@ -44,7 +53,6 @@ pub fn build_environment_plan(
         .collect::<BTreeMap<_, _>>()
         .into_values()
         .collect();
-    let patches = read_patch_directories(repository, reference, &files)?;
     // .acre.json comes from the primary checkout on disk, not from the target commit.
     let overrides = load_repo_config(repository.primary_path())?
         .environment
@@ -160,7 +168,7 @@ pub fn build_environment_plan(
         os_major(),
         node
     );
-    let ecosystem_ids: Vec<String> = ecosystems.iter().map(|item| item.id.to_owned()).collect();
+    let ecosystem_ids: Vec<&str> = ecosystems.iter().map(|item| item.id).collect();
     let fingerprint_value = json!({
         "platformKey": platform_key,
         "ecosystems": ecosystem_ids,
@@ -172,13 +180,12 @@ pub fn build_environment_plan(
     let fingerprint = sha256(serde_json::to_vec(&fingerprint_value)?);
 
     Ok(EnvironmentPlan {
+        reference: reference.to_owned(),
         fingerprint,
-        ecosystem_ids,
         cache_roots,
         required_roots,
         output_roots,
         seed_files,
-        platform_key,
     })
 }
 
@@ -236,24 +243,18 @@ fn normalize_fingerprint_content(file: &str, content: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&Value::Object(relevant)).unwrap_or_else(|_| content.to_vec())
 }
 
-const NODE_ECOSYSTEMS: &[&str] = &["pnpm", "yarn", "npm", "bun", "turbo", "next"];
+const NODE_ECOSYSTEMS: &[&str] = &["javascript", "turbo", "next"];
 
-/// Every package directory's `patches/` tree at `reference`, keyed by that directory.
-fn read_patch_directories(
-    repository: &Repository,
-    reference: &str,
-    files: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeMap<String, Vec<u8>>> {
-    let directories: Vec<String> = files
-        .keys()
+/// The `patches/` directory beside every `package.json`, whether or not it exists.
+fn patch_directories(manifests: &[String]) -> Vec<String> {
+    manifests
+        .iter()
         .filter_map(|path| match path.rsplit_once('/') {
             Some((directory, "package.json")) => Some(join_relative(directory, PATCH_DIRECTORY)),
             None if path == "package.json" => Some(PATCH_DIRECTORY.to_owned()),
             _ => None,
         })
-        .collect();
-    let requested: Vec<&str> = directories.iter().map(String::as_str).collect();
-    read_files_at_ref(&repository.top_level, reference, &requested)
+        .collect()
 }
 
 fn depth(directory: &str) -> usize {
@@ -273,29 +274,44 @@ fn join_relative(directory: &str, name: &str) -> String {
 }
 
 /// Kernel release major: on macOS that tracks the OS version, which native modules care about.
-/// Read without PATH lookup, so every caller on one machine agrees.
-fn os_major() -> String {
-    let release = if cfg!(target_os = "macos") {
-        Command::new("/usr/bin/uname")
-            .arg("-r")
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-    } else if cfg!(target_os = "linux") {
-        std::fs::read_to_string("/proc/sys/kernel/osrelease").ok()
-    } else {
-        None
-    };
-    release
-        .as_deref()
-        .and_then(|release| release.trim().split('.').next())
-        .filter(|major| !major.is_empty())
-        .unwrap_or("unknown")
-        .to_owned()
+/// Read without PATH lookup, so every caller on one machine agrees, and once: one command plans
+/// several commits.
+fn os_major() -> &'static str {
+    static MAJOR: OnceLock<String> = OnceLock::new();
+    MAJOR.get_or_init(|| {
+        let release = if cfg!(target_os = "macos") {
+            Command::new("/usr/bin/uname")
+                .arg("-r")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        } else if cfg!(target_os = "linux") {
+            std::fs::read_to_string("/proc/sys/kernel/osrelease").ok()
+        } else {
+            None
+        };
+        release
+            .as_deref()
+            .and_then(|release| release.trim().split('.').next())
+            .filter(|major| !major.is_empty())
+            .unwrap_or("unknown")
+            .to_owned()
+    })
 }
 
+/// The major version of the `node` that `directory` resolves to, asked once per directory.
 fn node_major(directory: &Path) -> Option<String> {
+    static ASKED: Mutex<BTreeMap<PathBuf, Option<String>>> = Mutex::new(BTreeMap::new());
+    ASKED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(directory.to_path_buf())
+        .or_insert_with(|| run_node_version(directory))
+        .clone()
+}
+
+fn run_node_version(directory: &Path) -> Option<String> {
     let output = Command::new("node")
         .arg("--version")
         // Version managers pick node by directory; the primary checkout is the stable choice.

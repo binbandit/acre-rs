@@ -2,9 +2,10 @@
 
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::Result;
 use crate::git::runner::{RunOptions, decode_stdout, run_git, run_git_with};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -76,7 +77,6 @@ fn parse_refs_with_remotes(buffer: &[u8], remotes: &[&str]) -> Vec<GitRef> {
             let full_name = record[0].trim_start_matches(['\r', '\n']);
             let oid = record[1].as_str();
             let upstream = record[2].trim_end_matches(['\r', '\n']);
-            // origin/HEAD is a pointer, not a branch anyone opens.
             if full_name.is_empty() || oid.is_empty() {
                 return None;
             }
@@ -107,6 +107,7 @@ fn parse_refs_with_remotes(buffer: &[u8], remotes: &[&str]) -> Vec<GitRef> {
                 })
                 .max_by_key(|(remote, _)| remote.len())
                 .or_else(|| qualified.split_once('/'))?;
+            // origin/HEAD is a pointer, not a branch anyone opens.
             if short_name == "HEAD" {
                 return None;
             }

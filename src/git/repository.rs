@@ -1,14 +1,13 @@
 //! Repository discovery: top level, common dir, remotes, default branch, and registered worktrees.
 
-use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::error::{AcreError, Result, exit};
 use crate::git::runner::{RunOptions, decode_stdout, run_git_with};
-use crate::git::worktrees::{
-    GitWorktree, find_current_worktree, list_worktrees, parse_worktree_porcelain, with_existence,
-};
+use crate::git::worktrees::{GitWorktree, find_current_worktree, list_worktrees, list_worktrees_of};
 use crate::provider::remote::parse_hosted_remote;
 use crate::util::{canonical_or_absolute, short_hash};
 
@@ -50,15 +49,31 @@ impl Repository {
             .iter()
             .find(|worktree| canonical_or_absolute(&worktree.path) == path)
     }
+
+    /// Whether Git would resolve `path` to this repository: the nearest directory above it holding
+    /// a `.git` entry is one of our worktrees, not another repository nested inside one.
+    pub fn contains(&self, path: &Path) -> bool {
+        canonical_or_absolute(path)
+            .ancestors()
+            .find(|directory| directory.join(".git").symlink_metadata().is_ok())
+            .is_some_and(|root| self.worktree_at(root).is_some())
+    }
+
+    /// This repository with its worktrees listed again. Worktrees are the one part of a
+    /// repository other Acre processes change, so this is what a lock holder needs to re-read.
+    pub fn refreshed(&self) -> Result<Self> {
+        let worktrees = list_worktrees_of(&self.common_dir)?;
+        Ok(Self {
+            current_worktree: find_current_worktree(&worktrees, &self.invocation_dir),
+            worktrees,
+            ..self.clone()
+        })
+    }
 }
 
 pub fn discover_repository(cwd: &Path) -> Result<Repository> {
-    // Each path is a separate response: embedded newlines must not split fields.
-    let top_level = repository_path(cwd, "--show-toplevel")?;
-    let git_dir = repository_path(cwd, "--git-dir")?;
-    let common_dir = repository_path(cwd, "--git-common-dir")?;
-    // git happily lists worktrees whose directories have been deleted, so check the disk ourselves.
-    let worktrees = with_existence(list_worktrees(&top_level)?);
+    let [top_level, git_dir, common_dir] = repository_paths(cwd)?;
+    let worktrees = list_worktrees(&top_level)?;
     let config = read_repository_config(&top_level)?;
     // origin by convention, otherwise whichever remote sorts first so the choice is at least stable.
     let remote = if config.remote_urls.contains_key("origin") {
@@ -111,10 +126,27 @@ pub fn discover_repository(cwd: &Path) -> Result<Repository> {
     })
 }
 
-fn repository_path(cwd: &Path, option: &str) -> Result<PathBuf> {
+/// The worktree's top level, its Git directory, and the common directory its repository shares.
+fn repository_paths(cwd: &Path) -> Result<[PathBuf; 3]> {
+    const OPTIONS: [&str; 3] = ["--show-toplevel", "--git-dir", "--git-common-dir"];
+    let together = rev_parse(cwd, &OPTIONS)?;
+    if let [top_level, git_dir, common_dir] = together.split('\n').collect::<Vec<_>>()[..] {
+        return Ok([top_level, git_dir, common_dir].map(PathBuf::from));
+    }
+    // rev-parse separates its answers with newlines, so a path containing one arrives as extra
+    // lines. Asked for alone, the whole response is the path.
+    let [top_level, git_dir, common_dir] = OPTIONS.map(|option| rev_parse(cwd, &[option]));
+    Ok([top_level?, git_dir?, common_dir?].map(PathBuf::from))
+}
+
+fn rev_parse(cwd: &Path, options: &[&str]) -> Result<String> {
+    let args: Vec<&str> = ["rev-parse", "--path-format=absolute"]
+        .into_iter()
+        .chain(options.iter().copied())
+        .collect();
     let result = run_git_with(
         cwd,
-        &["rev-parse", "--path-format=absolute", option],
+        &args,
         RunOptions {
             accepted_statuses: &[0, 128],
             ..RunOptions::default()
@@ -128,32 +160,14 @@ fn repository_path(cwd: &Path, option: &str) -> Result<PathBuf> {
         ));
     }
     let bytes = result.stdout.strip_suffix(b"\n").unwrap_or(&result.stdout);
-    Ok(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
+    Ok(String::from_utf8_lossy(bytes).into_owned())
 }
 
 pub fn discover_repository_from_common_dir(common_dir: &Path) -> Result<Repository> {
-    let git_dir = format!("--git-dir={}", common_dir.display());
-    // Run from beside the .git dir: the caller's own directory may be a workspace that no longer exists.
-    let parent = common_dir.parent().unwrap_or_else(|| Path::new("."));
-    let result = run_git_with(
-        parent,
-        &[&git_dir, "worktree", "list", "--porcelain", "-z"],
-        RunOptions {
-            accepted_statuses: &[0, 128],
-            ..RunOptions::default()
-        },
-    )?;
-    if result.status != 0 {
-        return Err(AcreError::new(
-            "ACRE_REPOSITORY_UNAVAILABLE",
-            "The repository is no longer available.",
-            exit::ENVIRONMENT,
-        ));
-    }
-    let first = parse_worktree_porcelain(&result.stdout)
+    let first = list_worktrees_of(common_dir)?
         .into_iter()
         // A bare repository has no checkout to discover from; its first linked worktree does.
-        .find(|worktree| !worktree.bare && worktree.path.is_dir())
+        .find(|worktree| !worktree.bare && worktree.exists)
         .ok_or_else(|| {
             AcreError::new(
                 "ACRE_REPOSITORY_UNAVAILABLE",

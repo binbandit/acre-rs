@@ -173,6 +173,103 @@ fn yarn_install_state_does_not_block_done() {
     assert_eq!(returned["ok"], true, "{returned}");
 }
 
+/// Creates each file under `root`, with any directories it needs.
+fn write_files(root: &std::path::Path, files: &[&str]) {
+    for file in files {
+        let path = root.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "generated").unwrap();
+    }
+}
+
+#[test]
+fn javascript_build_output_is_cleared_and_tool_caches_are_kept() {
+    let f = Fixture::new();
+    commit(
+        &f,
+        &[(
+            ".gitignore",
+            "node_modules\nbuild\n.svelte-kit\n.nx\n.eslintcache\n.cache\n*.log\n",
+        )],
+        "ignore generated files",
+    );
+    let path = PathBuf::from(open(&f, "app")["path"].as_str().unwrap());
+    write_files(
+        &path,
+        &[
+            "build/index.js",
+            ".svelte-kit/generated/root.js",
+            ".nx/workspace-data/graph.json",
+            ".nx/cache/run.json",
+            ".eslintcache",
+            ".cache/loader/entry",
+            "npm-debug.log",
+        ],
+    );
+    let returned = done(&f, "app");
+    assert_eq!(returned["pooled"], true, "{returned}");
+    assert_eq!(
+        returned["clearedOutputs"],
+        serde_json::json!([".nx", ".svelte-kit", "build", "npm-debug.log"]),
+        "{returned}"
+    );
+    for kept in [".nx/cache/run.json", ".eslintcache", ".cache/loader/entry"] {
+        assert!(path.join(kept).exists(), "{kept} is a cache");
+    }
+    for cleared in ["build", ".svelte-kit", ".nx/workspace-data", "npm-debug.log"] {
+        assert!(!path.join(cleared).exists(), "{cleared} is build output");
+    }
+}
+
+#[test]
+fn python_and_go_build_output_does_not_block_done() {
+    let f = Fixture::new();
+    fs::remove_file(f.repo.join("package.json")).unwrap();
+    commit(
+        &f,
+        &[
+            (
+                ".gitignore",
+                ".tox\nbuild\ndist\n*.egg-info\n.coverage\nbin\n*.test\n",
+            ),
+            ("pyproject.toml", "[project]\nname = \"app\"\n"),
+            ("tools/go.mod", "module example.invalid/tools\n"),
+        ],
+        "python and go",
+    );
+    let path = PathBuf::from(open(&f, "work")["path"].as_str().unwrap());
+    write_files(
+        &path,
+        &[
+            ".tox/py312/pyvenv.cfg",
+            "build/lib/app.py",
+            "dist/app-1.0.tar.gz",
+            "app.egg-info/PKG-INFO",
+            ".coverage",
+            "tools/bin/tool",
+            "tools/tools.test",
+        ],
+    );
+    // A second workspace is opened while the first holds its environments: they embed their
+    // installation path, so they are reused in place and never copied.
+    let concurrent = PathBuf::from(open(&f, "concurrent")["path"].as_str().unwrap());
+    assert!(!concurrent.join(".tox").exists());
+
+    let returned = done(&f, "work");
+    assert_eq!(returned["pooled"], true, "{returned}");
+    assert!(path.join(".tox/py312/pyvenv.cfg").exists());
+    for cleared in [
+        "build",
+        "dist",
+        "app.egg-info",
+        ".coverage",
+        "tools/bin",
+        "tools/tools.test",
+    ] {
+        assert!(!path.join(cleared).exists(), "{cleared} is build output");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_relative_seed_symlink_still_resolves_in_the_workspace() {

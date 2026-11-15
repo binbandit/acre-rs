@@ -2,10 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
-use crate::git::runner::run_git;
-use crate::util::canonical_or_absolute;
 use serde::{Deserialize, Serialize};
+
+use crate::error::{AcreError, Result, exit};
+use crate::git::runner::{RunOptions, run_git, run_git_with};
+use crate::util::canonical_or_absolute;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -26,10 +27,33 @@ pub struct GitWorktree {
 
 pub fn list_worktrees(cwd: &Path) -> Result<Vec<GitWorktree>> {
     let result = run_git(cwd, &["worktree", "list", "--porcelain", "-z"])?;
-    Ok(parse_worktree_porcelain(&result.stdout))
+    Ok(with_existence(parse_worktree_porcelain(&result.stdout)))
 }
 
-pub fn parse_worktree_porcelain(buffer: &[u8]) -> Vec<GitWorktree> {
+/// Lists a repository's worktrees from its common directory alone, for when no worktree is known
+/// to exist: the caller's own directory may be a workspace that has just been removed.
+pub fn list_worktrees_of(common_dir: &Path) -> Result<Vec<GitWorktree>> {
+    let git_dir = format!("--git-dir={}", common_dir.display());
+    let beside = common_dir.parent().unwrap_or_else(|| Path::new("."));
+    let result = run_git_with(
+        beside,
+        &[&git_dir, "worktree", "list", "--porcelain", "-z"],
+        RunOptions {
+            accepted_statuses: &[0, 128],
+            ..RunOptions::default()
+        },
+    )?;
+    if result.status != 0 {
+        return Err(AcreError::new(
+            "ACRE_REPOSITORY_UNAVAILABLE",
+            "The repository is no longer available.",
+            exit::ENVIRONMENT,
+        ));
+    }
+    Ok(with_existence(parse_worktree_porcelain(&result.stdout)))
+}
+
+fn parse_worktree_porcelain(buffer: &[u8]) -> Vec<GitWorktree> {
     #[derive(Default)]
     struct Current {
         path: Option<PathBuf>,
@@ -108,7 +132,7 @@ pub fn parse_worktree_porcelain(buffer: &[u8]) -> Vec<GitWorktree> {
     rows
 }
 
-pub fn with_existence(mut worktrees: Vec<GitWorktree>) -> Vec<GitWorktree> {
+fn with_existence(mut worktrees: Vec<GitWorktree>) -> Vec<GitWorktree> {
     for worktree in &mut worktrees {
         // git only marks a worktree prunable once it re-scans; check the directory ourselves for the current truth.
         worktree.exists = worktree.path.is_dir();
@@ -118,7 +142,8 @@ pub fn with_existence(mut worktrees: Vec<GitWorktree>) -> Vec<GitWorktree> {
 
 pub fn find_current_worktree(worktrees: &[GitWorktree], cwd: &Path) -> Option<GitWorktree> {
     let cwd = canonical_or_absolute(cwd);
-    worktrees.iter()
+    worktrees
+        .iter()
         .filter(|worktree| cwd.starts_with(canonical_or_absolute(&worktree.path)))
         // A nested worktree wins over the checkout containing it.
         .max_by_key(|worktree| worktree.path.as_os_str().len())

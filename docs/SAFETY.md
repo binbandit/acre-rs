@@ -34,6 +34,8 @@ Cross-repository PRs are untrusted. No seed file is copied. Approved cache roots
 
 Repository state and the shared repository index use OS-backed exclusive file locks. The OS releases locks when a process exits, including crashes. Lock files remain on disk so concurrent processes always lock the same file. Do not run older versions using directory locks concurrently with this version.
 
+A command that changes workspaces waits up to 30 seconds for the repository lock, so running one straight after another, or while a replenisher is between cache copies, takes a moment longer instead of failing. Shell navigation never waits: it moves the shell and skips its lease bookkeeping when the lock is held.
+
 Replenishment reserves a retained worktree under the repository lock, then copies caches to
 private temporary directories without holding that lock. A separate warming lock prevents
 duplicate replenishers. Before publishing caches and making the slot idle, Acre reloads state
@@ -59,6 +61,6 @@ Pool reuse, eviction, and garbage collection require an unlocked, detached, clea
 
 Activation removes a slot from the persisted pool before changing files. If activation or its final state write fails, recovery retains the directory without trusting the old cache fingerprint. Legacy idle slots without a recorded commit remain unverified; explicitly reopen them, attach a branch if detached, and return them to establish a safe baseline.
 
-Process-inspection errors on macOS and Linux retain workspaces and disqualify idle slots from reuse. A failed PID probe does not expire a lease. Windows has no working-directory process scanner; its lease checks still apply.
+A process scan on macOS or Linux that cannot see even Acre's own process retains workspaces and disqualifies idle slots from reuse. A failed PID probe does not expire a lease. Windows has no working-directory process scanner; its lease checks still apply.
 
 Repair removes missing Acre-owned worktree registrations individually. It never runs repository-wide pruning against external registrations. Active bisect sessions block return just like merges and rebases. Activation rollback only deletes a branch after that activation successfully created it.

@@ -15,11 +15,54 @@ pub struct EcosystemDefinition {
 }
 
 /// Files the operating system's file manager leaves in any directory it opens.
-pub const SYSTEM_OUTPUT_ROOTS: &[&str] = &[".DS_Store", "Thumbs.db"];
+pub const SYSTEM_OUTPUT_ROOTS: &[&str] = &[".DS_Store", "Thumbs.db", "desktop.ini"];
 
-/// What JavaScript tooling conventionally writes: bundler output, test coverage, and
-/// TypeScript's incremental build state.
-const NODE_OUTPUT_ROOTS: &[&str] = &["dist", "coverage", "*.tsbuildinfo"];
+/// What every JavaScript project shares, whichever package manager installs it.
+const JAVASCRIPT: EcosystemDefinition = EcosystemDefinition {
+    id: "javascript",
+    // Tool caches are keyed by content, so they stay valid across branches and are worth
+    // keeping warm beside `node_modules`.
+    cache_roots: &[
+        ".eslintcache",
+        ".stylelintcache",
+        ".cache",
+        ".parcel-cache",
+        ".swc",
+        ".rollup.cache",
+        ".angular/cache",
+        ".nx/cache",
+        ".vitepress/cache",
+    ],
+    required_roots: &[],
+    // Bundles, reports, logs, packed tarballs, and the directories frameworks generate from one
+    // branch's routes and types.
+    output_roots: &[
+        "dist",
+        "build",
+        "coverage",
+        ".nyc_output",
+        "*.lcov",
+        "*.tsbuildinfo",
+        "*.log",
+        "*.tgz",
+        "storybook-static",
+        "playwright-report",
+        "test-results",
+        ".output",
+        ".nuxt",
+        ".svelte-kit",
+        ".astro",
+        ".docusaurus",
+        ".expo",
+        ".vinxi",
+        ".react-router",
+        ".vercel/output",
+        ".vitepress/dist",
+        // Nx's project graph and daemon files; its task cache inside is a cache root.
+        ".nx",
+    ],
+    seed_files: &[".env", ".env.local"],
+};
 
 // Manifest names fingerprinted at every depth, including toolchain files shared across ecosystems.
 pub const ALL_FINGERPRINT_FILES: &[&str] = &[
@@ -77,8 +120,8 @@ const PNPM: EcosystemDefinition = EcosystemDefinition {
     id: "pnpm",
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
-    output_roots: NODE_OUTPUT_ROOTS,
-    seed_files: &[".env", ".env.local"],
+    output_roots: &[],
+    seed_files: &[],
 };
 const YARN: EcosystemDefinition = EcosystemDefinition {
     id: "yarn",
@@ -94,22 +137,22 @@ const YARN: EcosystemDefinition = EcosystemDefinition {
         ".pnp.data.json",
     ],
     required_roots: &["node_modules"],
-    output_roots: NODE_OUTPUT_ROOTS,
-    seed_files: &[".env", ".env.local"],
+    output_roots: &[],
+    seed_files: &[],
 };
 const NPM: EcosystemDefinition = EcosystemDefinition {
     id: "npm",
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
-    output_roots: NODE_OUTPUT_ROOTS,
-    seed_files: &[".env", ".env.local"],
+    output_roots: &[],
+    seed_files: &[],
 };
 const BUN: EcosystemDefinition = EcosystemDefinition {
     id: "bun",
     cache_roots: &["node_modules"],
     required_roots: &["node_modules"],
-    output_roots: NODE_OUTPUT_ROOTS,
-    seed_files: &[".env", ".env.local"],
+    output_roots: &[],
+    seed_files: &[],
 };
 const TURBO: EcosystemDefinition = EcosystemDefinition {
     id: "turbo",
@@ -129,27 +172,49 @@ const RUST: EcosystemDefinition = EcosystemDefinition {
     id: "rust",
     cache_roots: &["target"],
     required_roots: &[],
-    output_roots: &[],
+    // rustfmt backups and the raw profiles coverage runs leave beside the crates.
+    output_roots: &["*.rs.bk", "*.profraw"],
     seed_files: &[".env", ".env.local"],
 };
 const PYTHON: EcosystemDefinition = EcosystemDefinition {
     id: "python",
+    // `.tox` and `.nox` hold virtual environments, which are only ever reused in place.
     cache_roots: &[
         ".venv",
+        "venv",
+        ".tox",
+        ".nox",
         "__pycache__",
         ".pytest_cache",
         ".mypy_cache",
         ".ruff_cache",
+        ".hypothesis",
+        ".pytype",
+        ".pyre",
     ],
     required_roots: &[".venv"],
-    output_roots: &[],
+    // Packaging and coverage output.
+    output_roots: &[
+        "build",
+        "dist",
+        "*.egg-info",
+        ".eggs",
+        ".pdm-build",
+        "htmlcov",
+        ".coverage",
+        "coverage.xml",
+        ".dmypy.json",
+        "*.log",
+    ],
     seed_files: &[".env", ".env.local"],
 };
 const GO: EcosystemDefinition = EcosystemDefinition {
     id: "go",
+    // Go's caches live outside the repository, so there is nothing to keep warm inside it.
     cache_roots: &[],
     required_roots: &[],
-    output_roots: &[],
+    // Compiled binaries, test binaries, and coverage profiles.
+    output_roots: &["bin", "dist", "*.test", "*.out", "*.coverprofile"],
     seed_files: &[".env", ".env.local"],
 };
 
@@ -189,7 +254,7 @@ fn detect_directory_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<Ecosyst
         .get("package.json")
         .and_then(|value| serde_json::from_slice::<serde_json::Value>(value).ok())
         .unwrap_or_default();
-    let package_manager = package_json["packageManager"]
+    let declared = package_json["packageManager"]
         .as_str()
         .and_then(|value| value.split('@').next())
         .unwrap_or_default();
@@ -205,18 +270,25 @@ fn detect_directory_ecosystems(files: &BTreeMap<String, Vec<u8>>) -> Vec<Ecosyst
     };
 
     // One package manager per project directory: lockfile, then packageManager, then npm.
-    if files.contains_key("pnpm-lock.yaml") || package_manager == "pnpm" {
-        result.push(PNPM);
-    } else if files.contains_key("yarn.lock") || package_manager == "yarn" {
-        result.push(YARN);
-    } else if files.contains_key("bun.lock") || files.contains_key("bun.lockb") || package_manager == "bun" {
-        result.push(BUN);
+    let package_manager = if files.contains_key("pnpm-lock.yaml") || declared == "pnpm" {
+        Some(PNPM)
+    } else if files.contains_key("yarn.lock") || declared == "yarn" {
+        Some(YARN)
+    } else if files.contains_key("bun.lock") || files.contains_key("bun.lockb") || declared == "bun" {
+        Some(BUN)
     } else if files.contains_key("package-lock.json")
         || files.contains_key("npm-shrinkwrap.json")
         || files.contains_key("package.json")
     {
-        result.push(NPM);
-    }
+        Some(NPM)
+    } else {
+        None
+    };
+    result.extend(
+        package_manager
+            .into_iter()
+            .flat_map(|manager| [JAVASCRIPT, manager]),
+    );
 
     // Tooling stacks on top of the package manager, so these are checked independently.
     if files.contains_key("turbo.json") || has_dependency("turbo") {

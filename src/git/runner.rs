@@ -20,7 +20,6 @@ pub struct ProcessResult {
     pub status: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
-    pub duration_ms: u128,
 }
 
 #[derive(Debug, Clone)]
@@ -137,7 +136,6 @@ fn run_command(
         status: status_code,
         stdout,
         stderr,
-        duration_ms: started.elapsed().as_millis(),
     };
 
     // Callers that expect a non-zero answer (rev-parse --verify, check-ignore) opt in per call.

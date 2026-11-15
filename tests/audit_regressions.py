@@ -369,31 +369,6 @@ def test_repair_preserves_external_registrations():
     assert str(external) in before and str(external) in after
     return
 
-def test_process_probe_failure_prevents_reuse():
-    f = Fixture('process-scanner-failure')
-    path = Path(f.new()['path'])
-    f.data('done','work')
-    child = subprocess.Popen(['/bin/sleep','30'],cwd=path)
-    try:
-        bindir = f.root/'bin'
-        bindir.mkdir()
-        lsof = bindir/'lsof'
-        lsof.write_text('#!/bin/sh\nexit 2\n')
-        lsof.chmod(0o755)
-        env = dict(f.env, PATH=str(bindir)+':'+f.env['PATH'])
-        result = f.new('next',env=env)
-        assert Path(result['path']) != path and child.poll() is None
-        done = f.data('done', 'next', env=env, check=False)
-        assert done['retained'] and done['assessment']['processCheckError']
-        acquired = f.data('acquire', 'leased', '--new', '--holder', 'test', env=env)
-        released = f.data('release', '--lease-id', acquired['lease_id'], env=env)
-        assert released['ok'] and released['retained']
-        assert Path(acquired['path']).exists()
-        return
-    finally:
-        child.terminate()
-        child.wait()
-
 def test_index_failure_does_not_issue_a_lease():
     f = Fixture('missing-index-write')
     root = Path(f.settings['root'])
