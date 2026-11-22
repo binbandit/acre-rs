@@ -10,9 +10,16 @@ use serde_json::json;
 #[test]
 fn user_text_prints_verbatim_in_plain_output() {
     let f = Fixture::new();
-    for branch in ["feat<1>", "fix/café"] {
+    // Windows cannot store `<` or `>` in a ref file name, so Git itself rejects that branch there.
+    let markup = if cfg!(windows) { "feat&1" } else { "feat<1>" };
+    for branch in [markup, "fix/café"] {
         let output = f.acre(&["--plain", "new", branch, "--stay"]).output().unwrap();
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "{branch}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         let stdout = String::from_utf8(output.stdout).unwrap();
         // Printed names and commands must survive a copy and paste.
         assert!(stdout.contains(&format!("Created {branch}")), "{stdout}");
