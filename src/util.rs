@@ -69,8 +69,24 @@ pub fn absolute(path: &Path) -> PathBuf {
 }
 
 pub fn canonical_or_absolute(path: &Path) -> PathBuf {
-    // Paths that don't exist yet still need a stable form for comparisons.
-    fs::canonicalize(path).unwrap_or_else(|_| absolute(path))
+    let path = absolute(path);
+    if let Ok(canonical) = fs::canonicalize(&path) {
+        return canonical;
+    }
+    // A path that no longer exists still needs the form its existing twin has: canonicalize the
+    // nearest existing ancestor and re-attach the rest, so symlinks and Windows 8.3 short names
+    // (RUNNER~1) in the parent resolve the same way as in the paths Git reports.
+    let mut missing = Vec::new();
+    let mut ancestor = path.as_path();
+    while let (Some(parent), Some(name)) = (ancestor.parent(), ancestor.file_name()) {
+        missing.push(name);
+        ancestor = parent;
+        if let Ok(mut canonical) = fs::canonicalize(ancestor) {
+            canonical.extend(missing.iter().rev());
+            return canonical;
+        }
+    }
+    path
 }
 
 pub fn is_inside(parent: &Path, child: &Path) -> bool {
@@ -256,5 +272,20 @@ mod tests {
         assert_eq!(branch_slug("feature/refunds"), "feature-refunds");
         assert_eq!(branch_slug("../weird:name?"), "weird-name");
         assert_eq!(branch_slug("///"), "workspace");
+    }
+
+    #[test]
+    fn missing_paths_resolve_through_their_existing_ancestor() {
+        let temp = tempfile::tempdir().unwrap();
+        let existing = temp.path().join("parent");
+        fs::create_dir(&existing).unwrap();
+        let missing = existing.join("gone").join("workspace");
+        assert_eq!(
+            canonical_or_absolute(&missing),
+            fs::canonicalize(&existing)
+                .unwrap()
+                .join("gone")
+                .join("workspace")
+        );
     }
 }
