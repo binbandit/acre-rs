@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -12,14 +12,15 @@ use crate::error::{AcreError, Result};
 
 pub fn now_iso() -> String {
     // RFC 3339 with `Z`: sorts as text, which the index and gc rely on.
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    format!("{:.3}", Timestamp::now())
 }
 
 pub fn age_millis(value: &str) -> u128 {
-    DateTime::parse_from_rfc3339(value)
+    value
+        .parse::<Timestamp>()
         .map(|time| {
-            let duration = Utc::now().signed_duration_since(time.with_timezone(&Utc));
-            duration.num_milliseconds().max(0) as u128
+            let duration = Timestamp::now().duration_since(time);
+            duration.as_millis().max(0) as u128
         })
         // An unparseable timestamp counts as brand new, which is the cautious reading.
         .unwrap_or(0)
@@ -266,6 +267,24 @@ pub fn shell_quote(value: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn now_iso_is_utc_with_millisecond_precision() {
+        let value = now_iso();
+        assert_eq!(value.len(), "2026-01-02T03:04:05.678Z".len(), "{value}");
+        assert!(value.ends_with('Z'), "{value}");
+        assert!(value.parse::<Timestamp>().is_ok(), "{value}");
+    }
+
+    #[test]
+    fn age_millis_reads_offsets_and_treats_garbage_as_new() {
+        assert_eq!(age_millis("not a timestamp"), 0);
+        assert_eq!(age_millis("2999-01-01T00:00:00Z"), 0);
+        let past = "2020-01-01T00:00:00Z";
+        let offset = age_millis("2020-01-01T02:00:00+02:00");
+        assert!(age_millis(past).abs_diff(offset) < 5_000);
+        assert!(age_millis(past) > 1_000_000);
+    }
 
     #[test]
     fn branch_slugs_are_safe_directory_names() {
