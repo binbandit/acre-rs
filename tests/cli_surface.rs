@@ -12,7 +12,12 @@ fn user_text_prints_verbatim_in_plain_output() {
     let f = Fixture::new();
     for branch in ["feat<1>", "fix/café"] {
         let output = f.acre(&["--plain", "new", branch, "--stay"]).output().unwrap();
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "{branch}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         let stdout = String::from_utf8(output.stdout).unwrap();
         // Printed names and commands must survive a copy and paste.
         assert!(stdout.contains(&format!("Created {branch}")), "{stdout}");
